@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.runs/
+.scratch/
+*.log
+.DS_Store
