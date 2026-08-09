@@ -1,0 +1,34 @@
+{
+  "name": "@lchase/yak",
+  "version": "0.0.1",
+  "description": "An agentic workflow engine",
+  "type": "module",
+  "bin": {
+    "yak": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup src/cli/index.ts --format esm --target node22 --clean",
+    "dev": "tsx src/cli/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "jexl": "^2.3.0",
+    "p-limit": "^6.1.0",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.5.1",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}
