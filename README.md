@@ -6,5 +6,37 @@ Reads a YAML DAG, runs steps (shell commands, pure transforms, coding-agent
 invocations, human gates), and journals everything to disk so runs resume
 exactly where they stopped.
 
-Status: M0 in progress (3/6 — repo scaffold, single-step run, multi-step DAG
-execution with fan-out). See `spec.md` §14.
+Status: M0 in progress (6/9 — repo scaffold, single-step run, multi-step DAG
+execution with fan-out, IR validation, content-addressed cache,
+suspend/resume). See `spec.md` §14.
+
+## Current capabilities (M0)
+
+M0 is zero-AI by design — a boring shell pipeline has to cache, resume, and
+journal correctly before nondeterministic steps go anywhere near it.
+
+- **Step kinds:** `command` (shell exec, capture stdout/stderr/exitCode) and
+  `transform` (named pure function from `.yak/transforms.ts`). `agent`,
+  `gate`, `map`, and `loop` are in the IR types but not yet executable —
+  the scheduler rejects them.
+- **Scheduling:** topological sort, concurrent execution of independent
+  steps up to a concurrency cap, artifact-driven eligibility (`needs`/
+  `produces`).
+- **Validation:** rejects unknown step kinds, duplicate ids, `needs`
+  referencing an artifact nothing produces, cycles, and reading
+  `<step>.exitCode` downstream of a step with `failOn: 'exitCode'`.
+- **Caching:** two-tier content-addressed cache key (`semanticKey` over
+  step id + input artifact hashes, `definitionKey` over the step's own
+  definition). `cache: strict` (default) re-runs on any mismatch;
+  `cache: loose` reuses the artifact and marks the step `stale` when only
+  the definition moved.
+- **Journal:** append-only JSONL event log of every step's lifecycle.
+- **Resume:** `yak resume <run-id>` replays a run's journal to find what
+  already completed (a step left `step.started` with no matching
+  `step.completed`/`step.failed` is treated as interrupted), recomputes each
+  completed step's cache keys against the frozen workflow, reuses the
+  on-disk artifact on a match, and re-runs everything from the first
+  mismatch downward.
+
+Not yet implemented: `yak status`, agent/gate/map/loop step execution, the
+CLI beyond `run`/`resume`.

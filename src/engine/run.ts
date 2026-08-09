@@ -1,22 +1,33 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { loadWorkflowYaml } from '../ir/load.js'
 import { normalizeWorkflow } from '../ir/normalize.js'
+import type { Workflow } from '../ir/types.js'
 import { validateWorkflow } from '../ir/validate.js'
 import { sha256 } from '../util/hash.js'
-import { appendJournalEvent } from './journal.js'
+import { appendJournalEvent, completedStepsFromJournal, readJournal } from './journal.js'
 import { runEligibleSteps } from './scheduler.js'
 
 export interface ExecuteOptions {
   runsDir?: string
   cwd?: string
+  cacheDir?: string
 }
 
 export interface ExecuteResult {
   runId: string
   runDir: string
   status: 'ok' | 'failed'
+}
+
+function resolveDirs(runsDir: string | undefined, cwd: string | undefined, cacheDir: string | undefined) {
+  const resolvedRunsDir = runsDir ?? path.join(process.cwd(), '.runs')
+  return {
+    runsDir: resolvedRunsDir,
+    cwd: cwd ?? process.cwd(),
+    cacheDir: cacheDir ?? path.join(path.dirname(resolvedRunsDir), '.yak', 'cache'),
+  }
 }
 
 function generateRunId(): string {
@@ -31,8 +42,7 @@ export async function executeWorkflowFile(
   workflowPath: string,
   opts: ExecuteOptions = {},
 ): Promise<ExecuteResult> {
-  const runsDir = opts.runsDir ?? path.join(process.cwd(), '.runs')
-  const cwd = opts.cwd ?? process.cwd()
+  const { runsDir, cwd, cacheDir } = resolveDirs(opts.runsDir, opts.cwd, opts.cacheDir)
 
   const raw = await loadWorkflowYaml(workflowPath)
   const workflow = normalizeWorkflow(raw)
@@ -50,7 +60,28 @@ export async function executeWorkflowFile(
     inputHash: sha256(JSON.stringify(workflow)),
   })
 
-  const status = await runEligibleSteps(workflow, { runId, runDir, cwd })
+  const status = await runEligibleSteps(workflow, { runId, runDir, cwd, cacheDir })
+
+  await appendJournalEvent(runDir, runId, { t: 'run.finished', status })
+
+  return { runId, runDir, status }
+}
+
+/**
+ * Spec §4.4 `yak resume <run-id>`: replay the journal of an interrupted run,
+ * mark completed steps, and continue — reusing cache-valid artifacts and
+ * re-running only what wasn't (and everything downstream of a mismatch).
+ */
+export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promise<ExecuteResult> {
+  const { runsDir, cwd, cacheDir } = resolveDirs(opts.runsDir, opts.cwd, opts.cacheDir)
+  const runDir = path.join(runsDir, runId)
+
+  const workflow = JSON.parse(await readFile(path.join(runDir, 'workflow.json'), 'utf8')) as Workflow
+
+  const events = await readJournal(runDir)
+  const resumeState = completedStepsFromJournal(events)
+
+  const status = await runEligibleSteps(workflow, { runId, runDir, cwd, cacheDir }, resumeState)
 
   await appendJournalEvent(runDir, runId, { t: 'run.finished', status })
 
