@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { ZodType } from 'zod'
+import { z, type ZodType } from 'zod'
 import { sha256 } from '../util/hash.js'
 
 export interface WrittenArtifact {
@@ -31,4 +31,8 @@ export async function writeArtifact<T>(
 export async function readArtifact<T>(runDir: string, name: string, schema: ZodType<T>): Promise<T> {
   const json = await readFile(artifactPath(runDir, name), 'utf8')
   return schema.parse(JSON.parse(json))
+}
+
+export async function readArtifactRaw(runDir: string, name: string): Promise<unknown> {
+  return readArtifact(runDir, name, z.unknown())
 }

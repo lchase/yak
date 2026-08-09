@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { loadWorkflowYaml } from '../ir/load.js'
 import { normalizeWorkflow } from '../ir/normalize.js'
+import { validateWorkflow } from '../ir/validate.js'
 import { sha256 } from '../util/hash.js'
 import { appendJournalEvent } from './journal.js'
 import { runEligibleSteps } from './scheduler.js'
@@ -35,6 +36,7 @@ export async function executeWorkflowFile(
 
   const raw = await loadWorkflowYaml(workflowPath)
   const workflow = normalizeWorkflow(raw)
+  validateWorkflow(workflow)
 
   const runId = generateRunId()
   const runDir = path.join(runsDir, runId)
