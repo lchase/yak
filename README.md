@@ -6,9 +6,9 @@ Reads a YAML DAG, runs steps (shell commands, pure transforms, coding-agent
 invocations, human gates), and journals everything to disk so runs resume
 exactly where they stopped.
 
-Status: M0 in progress (6/9 — repo scaffold, single-step run, multi-step DAG
+Status: M0 in progress (7/9 — repo scaffold, single-step run, multi-step DAG
 execution with fan-out, IR validation, content-addressed cache,
-suspend/resume). See `spec.md` §14.
+suspend/resume, yak status). See `spec.md` §14.
 
 ## Current capabilities (M0)
 
@@ -37,6 +37,10 @@ journal correctly before nondeterministic steps go anywhere near it.
   completed step's cache keys against the frozen workflow, reuses the
   on-disk artifact on a match, and re-runs everything from the first
   mismatch downward.
+- **Status:** `yak status [<run-id>]` replays a run's journal into per-step
+  state (`completed`/`cached`/`stale`/`failed`/`pending`), with no db or
+  extra durable state beyond the journal. Defaults to the most recent run
+  when `<run-id>` is omitted.
 
-Not yet implemented: `yak status`, agent/gate/map/loop step execution, the
-CLI beyond `run`/`resume`.
+Not yet implemented: agent/gate/map/loop step execution, the CLI beyond
+`run`/`resume`/`status`.
