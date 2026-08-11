@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { loadWorkflowYaml } from '../ir/load.js'
 import { normalizeWorkflow } from '../ir/normalize.js'
@@ -21,8 +21,12 @@ export interface ExecuteResult {
   status: 'ok' | 'failed'
 }
 
+export function defaultRunsDir(): string {
+  return path.join(process.cwd(), '.runs')
+}
+
 function resolveDirs(runsDir: string | undefined, cwd: string | undefined, cacheDir: string | undefined) {
-  const resolvedRunsDir = runsDir ?? path.join(process.cwd(), '.runs')
+  const resolvedRunsDir = runsDir ?? defaultRunsDir()
   return {
     runsDir: resolvedRunsDir,
     cwd: cwd ?? process.cwd(),
@@ -67,6 +71,20 @@ export async function executeWorkflowFile(
   return { runId, runDir, status }
 }
 
+/** Run ids sort lexicographically by their leading ISO timestamp, so the
+ * latest run is just the last directory name — no need to read journals. */
+export async function findLatestRunId(runsDir: string): Promise<string | undefined> {
+  const entries = await readdir(runsDir).catch(() => [] as string[])
+  return entries.sort().at(-1)
+}
+
+/** Reads back the workflow a run was started with — the frozen copy
+ * `executeWorkflowFile` writes to `runDir/workflow.json`, shared by resume
+ * and status so both agree on run-directory layout in one place. */
+export async function readRunWorkflow(runDir: string): Promise<Workflow> {
+  return JSON.parse(await readFile(path.join(runDir, 'workflow.json'), 'utf8')) as Workflow
+}
+
 /**
  * Spec §4.4 `yak resume <run-id>`: replay the journal of an interrupted run,
  * mark completed steps, and continue — reusing cache-valid artifacts and
@@ -76,7 +94,7 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
   const { runsDir, cwd, cacheDir } = resolveDirs(opts.runsDir, opts.cwd, opts.cacheDir)
   const runDir = path.join(runsDir, runId)
 
-  const workflow = JSON.parse(await readFile(path.join(runDir, 'workflow.json'), 'utf8')) as Workflow
+  const workflow = await readRunWorkflow(runDir)
 
   const events = await readJournal(runDir)
   const resumeState = completedStepsFromJournal(events)
