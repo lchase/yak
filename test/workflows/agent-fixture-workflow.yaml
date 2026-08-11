@@ -1,0 +1,25 @@
+name: agent-fixture-workflow
+version: "1"
+steps:
+  - id: triage
+    agent:
+      prompt: { inline: "Triage this issue and produce a structured summary." }
+      schema: TriageSchema
+    produces: triage
+
+  - id: plan
+    agent:
+      prompt: { file: ".yak/prompts/plan.md" }
+      schema: PlanSchema
+      context: { inherit: [triage] }
+    produces: plan
+
+  - id: check
+    needs: [plan]
+    command: { run: "echo checked", capture: [stdout, exitCode] }
+    produces: check-result
+
+  - id: summarize
+    needs: [plan, check-result]
+    transform: { fn: summarizeAgentFixture }
+    produces: summary

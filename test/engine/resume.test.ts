@@ -25,7 +25,7 @@ async function setUpInterruptedRun(dir: string): Promise<{
 }> {
   const raw = await loadWorkflowYaml(CI_WORKFLOW)
   const workflow = normalizeWorkflow(raw)
-  validateWorkflow(workflow)
+  await validateWorkflow(workflow)
 
   const runsDir = path.join(dir, '.runs')
   const cacheDir = path.join(dir, '.yak', 'cache')

@@ -1,17 +1,25 @@
-import { buildProducerMap, dependenciesOf } from './graph.js'
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { ZodType } from 'zod'
+import { extractTemplateRoots } from '../expr/template.js'
+import { agentInputNames, buildProducerMap, dependenciesOf } from './graph.js'
 import type { ArtifactName, Expr, Step, StepId, Workflow } from './types.js'
 
 export class WorkflowValidationError extends Error {}
 
 const KNOWN_KINDS = new Set(['agent', 'command', 'transform', 'gate', 'map', 'loop'])
 
-export function validateWorkflow(workflow: Workflow): void {
+export async function validateWorkflow(workflow: Workflow, cwd: string = process.cwd()): Promise<void> {
   checkKnownKinds(workflow.steps)
   checkDuplicateIds(workflow.steps)
   const producerOf = buildProducerMap(workflow.steps)
   checkNeedsSatisfied(workflow.steps, producerOf)
   checkNoCycles(workflow.steps, producerOf)
   checkExitCodeReads(workflow.steps, producerOf)
+  await checkAgentSchemaKeys(workflow.steps, cwd)
+  await checkAgentPromptPlaceholders(workflow.steps, cwd)
+  checkSessionChainDepth(workflow.steps)
 }
 
 function checkKnownKinds(steps: Step[]): void {
@@ -107,4 +115,87 @@ function exitCodeReferences(expr: Expr): ArtifactName[] {
   if (typeof expr !== 'string') return []
   const matches = [...expr.matchAll(/([A-Za-z_][A-Za-z0-9_-]*)\.exitCode\b/g)]
   return matches.map((m) => m[1]!)
+}
+
+/** §13 `AgentStep.schema` is "a key in .yak/schemas.ts" — reject an unknown
+ * key at load time rather than failing the first time the step runs. */
+async function checkAgentSchemaKeys(steps: Step[], cwd: string): Promise<void> {
+  for (const step of steps) {
+    if (step.kind !== 'agent' || !step.schema) continue
+
+    const modulePath = path.resolve(cwd, '.yak/schemas.ts')
+    let mod: Record<string, unknown>
+    try {
+      mod = await import(pathToFileURL(modulePath).href)
+    } catch (err) {
+      throw new WorkflowValidationError(
+        `step "${step.id}": could not load .yak/schemas.ts to resolve schema "${step.schema}": ` +
+          `${(err as Error).message}`,
+      )
+    }
+    if (!(mod[step.schema] instanceof ZodType)) {
+      throw new WorkflowValidationError(
+        `step "${step.id}": schema "${step.schema}" not found in .yak/schemas.ts`,
+      )
+    }
+  }
+}
+
+/** A prompt placeholder's root must be a declared input — `needs` or
+ * `context.inherit` — otherwise the dependency graph is lying about what
+ * the step actually reads. */
+async function checkAgentPromptPlaceholders(steps: Step[], cwd: string): Promise<void> {
+  for (const step of steps) {
+    if (step.kind !== 'agent') continue
+
+    const text =
+      'file' in step.prompt
+        ? await readFile(path.resolve(cwd, step.prompt.file), 'utf8')
+        : step.prompt.inline
+
+    const allowed = new Set(agentInputNames(step))
+
+    for (const root of extractTemplateRoots(text)) {
+      if (!allowed.has(root)) {
+        throw new WorkflowValidationError(
+          `step "${step.id}": prompt references "{{${root}}}" but "${root}" is not in ` +
+            `needs or context.inherit`,
+        )
+      }
+    }
+  }
+}
+
+/** §3.4: the engine "warns when a chain [of context.session resumes]
+ * exceeds 3" — a warning, not a load-time failure, since a long chain is
+ * discouraged but not invalid. */
+function checkSessionChainDepth(steps: Step[]): void {
+  const stepsById = new Map(steps.map((s) => [s.id, s]))
+
+  function sessionParentOf(step: Step): StepId | undefined {
+    if (step.kind !== 'agent') return undefined
+    if (typeof step.context !== 'object' || !('session' in step.context)) return undefined
+    return step.context.session
+  }
+
+  for (const step of steps) {
+    if (step.kind !== 'agent') continue
+    let depth = 0
+    let current = sessionParentOf(step)
+    const seen = new Set<StepId>([step.id])
+
+    while (current !== undefined && !seen.has(current)) {
+      seen.add(current)
+      depth += 1
+      const parentStep = stepsById.get(current)
+      current = parentStep ? sessionParentOf(parentStep) : undefined
+    }
+
+    if (depth > 3) {
+      console.warn(
+        `step "${step.id}": context.session chain exceeds depth 3 (depth ${depth}) — ` +
+          `spec §3.4 discourages long resume chains`,
+      )
+    }
+  }
 }

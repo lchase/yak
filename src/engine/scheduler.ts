@@ -1,7 +1,10 @@
+import path from 'node:path'
 import pLimit from 'p-limit'
 import { z } from 'zod'
-import { buildProducerMap, dependenciesOf } from '../ir/graph.js'
+import { MockAdapter } from '../adapters/mock.js'
+import { agentInputNames, buildProducerMap, dependenciesOf, inputNamesOf } from '../ir/graph.js'
 import type { ArtifactName, Step, StepId, Workflow } from '../ir/types.js'
+import { AgentStepFailedError, runAgentStep } from '../steps/agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from '../steps/command.js'
 import { runTransformStep } from '../steps/transform.js'
 import { readArtifactRaw, writeArtifact } from './artifacts.js'
@@ -30,7 +33,7 @@ function collectInputHashes(
   artifactHashes: Map<ArtifactName, string>,
 ): Record<ArtifactName, string> {
   const inputArtifactHashes: Record<ArtifactName, string> = {}
-  for (const need of step.needs ?? []) {
+  for (const need of inputNamesOf(step)) {
     const hash = artifactHashes.get(need)
     if (hash) inputArtifactHashes[need] = hash
   }
@@ -100,12 +103,17 @@ export async function runEligibleSteps(
 
   if (resumeState) trustResumedSteps(remaining, producerOf, resumeState, completed, artifactHashes)
 
+  const agentSessionIds = new Map<StepId, string>()
+
   function launchEligible(): void {
     if (failed) return
     for (const step of remaining.values()) {
       if (inFlight.has(step.id)) continue
       if (dependenciesOf(step, producerOf).every((dep) => completed.has(dep))) {
-        inFlight.set(step.id, limit(() => runStep(step, ctx, artifactHashes)))
+        inFlight.set(
+          step.id,
+          limit(() => runStep(step, ctx, artifactHashes, workflow.name, agentSessionIds)),
+        )
       }
     }
   }
@@ -135,9 +143,11 @@ async function runStep(
   step: Step,
   ctx: ScheduleContext,
   artifactHashes: Map<ArtifactName, string>,
+  workflowName: string,
+  agentSessionIds: Map<StepId, string>,
 ): Promise<'ok' | 'failed'> {
-  if (step.kind !== 'command' && step.kind !== 'transform') {
-    throw new Error(`step "${step.id}": kind "${step.kind}" not yet supported in M0`)
+  if (step.kind !== 'command' && step.kind !== 'transform' && step.kind !== 'agent') {
+    throw new Error(`step "${step.id}": kind "${step.kind}" not yet supported in M1`)
   }
 
   const semanticKey = computeSemanticKey(step, collectInputHashes(step, artifactHashes))
@@ -177,15 +187,32 @@ async function runStep(
   try {
     if (step.kind === 'command') {
       result = runCommandStep(step, ctx.cwd)
-    } else {
+    } else if (step.kind === 'transform') {
       const inputs: Record<string, unknown> = {}
       for (const need of step.needs ?? []) {
         inputs[need] = await readArtifactRaw(ctx.runDir, need)
       }
       result = await runTransformStep(step, inputs, ctx.cwd)
+    } else {
+      const inputs: Record<string, unknown> = {}
+      for (const name of agentInputNames(step)) {
+        inputs[name] = await readArtifactRaw(ctx.runDir, name)
+      }
+      const sessionId =
+        typeof step.context === 'object' && 'session' in step.context
+          ? agentSessionIds.get(step.context.session)
+          : undefined
+      const fixturesDir = path.join(ctx.cwd, 'test', 'fixtures')
+      const adapter = new MockAdapter(fixturesDir, workflowName, step.id)
+      result = await runAgentStep(
+        step,
+        inputs,
+        { runId: ctx.runId, runDir: ctx.runDir, cwd: ctx.cwd, adapter, sessionId },
+        (nextSessionId) => agentSessionIds.set(step.id, nextSessionId),
+      )
     }
   } catch (err) {
-    if (err instanceof CommandStepFailedError) {
+    if (err instanceof CommandStepFailedError || err instanceof AgentStepFailedError) {
       await appendJournalEvent(ctx.runDir, ctx.runId, {
         t: 'step.failed',
         stepId: step.id,

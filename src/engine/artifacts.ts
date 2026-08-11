@@ -36,3 +36,18 @@ export async function readArtifact<T>(runDir: string, name: string, schema: ZodT
 export async function readArtifactRaw(runDir: string, name: string): Promise<unknown> {
   return readArtifact(runDir, name, z.unknown())
 }
+
+/** §3.5 schema repair loop, on final exhaustion: preserve the raw (still
+ * schema-invalid) output the step actually produced, for inspection. */
+export async function writeRejectedOutput(
+  runDir: string,
+  stepId: string,
+  attempt: number,
+  content: string,
+): Promise<string> {
+  const dir = path.join(runDir, 'artifacts', '.rejected')
+  await mkdir(dir, { recursive: true })
+  const filePath = path.join(dir, `${stepId}.${attempt}.txt`)
+  await writeFile(filePath, content, 'utf8')
+  return filePath
+}

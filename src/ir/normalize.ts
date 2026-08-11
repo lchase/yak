@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { CommandStep, Step, TransformStep, Workflow } from './types.js'
+import type { AgentStep, CommandStep, Step, TransformStep, Workflow } from './types.js'
 
 const rawCommandSchema = z.object({
   run: z.string(),
@@ -12,6 +12,21 @@ const rawTransformSchema = z.object({
   fn: z.string(),
 })
 
+const rawAgentContextSchema = z.union([
+  z.literal('fresh'),
+  z.object({ inherit: z.array(z.string()) }),
+  z.object({ session: z.string() }),
+])
+
+const rawAgentSchema = z.object({
+  prompt: z.union([z.object({ file: z.string() }), z.object({ inline: z.string() })]),
+  schema: z.string().optional(),
+  context: rawAgentContextSchema.optional(),
+  tools: z.array(z.string()).optional(),
+  model: z.string().optional(),
+  repairAttempts: z.number().optional(),
+})
+
 const rawStepSchema = z.object({
   id: z.string(),
   needs: z.array(z.string()).optional(),
@@ -19,6 +34,7 @@ const rawStepSchema = z.object({
   cache: z.enum(['strict', 'loose']).optional(),
   command: rawCommandSchema.optional(),
   transform: rawTransformSchema.optional(),
+  agent: rawAgentSchema.optional(),
 })
 type RawStep = z.infer<typeof rawStepSchema>
 
@@ -57,7 +73,24 @@ function normalizeStep(raw: RawStep): Step {
     return step
   }
 
-  throw new Error(`step "${raw.id}": only "command" and "transform" steps are supported in M0`)
+  if (raw.agent) {
+    const step: AgentStep = {
+      id: raw.id,
+      needs: raw.needs ?? [],
+      cache: raw.cache ?? 'strict',
+      kind: 'agent',
+      prompt: raw.agent.prompt,
+      ...(raw.agent.schema !== undefined ? { schema: raw.agent.schema } : {}),
+      ...(raw.agent.context !== undefined ? { context: raw.agent.context } : {}),
+      ...(raw.agent.tools !== undefined ? { tools: raw.agent.tools } : {}),
+      ...(raw.agent.model !== undefined ? { model: raw.agent.model } : {}),
+      ...(raw.agent.repairAttempts !== undefined ? { repairAttempts: raw.agent.repairAttempts } : {}),
+      ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
+    }
+    return step
+  }
+
+  throw new Error(`step "${raw.id}": only "command", "transform", and "agent" steps are supported in M1`)
 }
 
 export function normalizeWorkflow(raw: unknown): Workflow {
