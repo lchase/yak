@@ -8,6 +8,8 @@ import { agentInputNames, buildProducerMap, dependenciesOf, inputNamesOf } from 
 import type { AdapterId, ArtifactName, Step, StepId, Workflow } from '../ir/types.js'
 import { AgentStepFailedError, runAgentStep } from '../steps/agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from '../steps/command.js'
+import { runLoopStep } from '../steps/loop.js'
+import { runMapStep } from '../steps/map.js'
 import { runTransformStep } from '../steps/transform.js'
 import { readArtifactRaw, writeArtifact } from './artifacts.js'
 import {
@@ -35,10 +37,16 @@ export interface ScheduleContext {
  * under `test/fixtures`), so it's only useful when fixtures exist for the
  * exact workflow — still CLI-reachable for manual smoke-testing and the
  * eventual M2 acceptance run (ticket 08), not test-harness-only. */
-function buildAdapter(adapterId: AdapterId, ctx: ScheduleContext, workflowName: string, stepId: StepId): AgentAdapter {
+function buildAdapter(
+  adapterId: AdapterId,
+  ctx: ScheduleContext,
+  workflowName: string,
+  stepId: StepId,
+  iteration?: number,
+): AgentAdapter {
   if (adapterId === 'mock') {
     const fixturesDir = path.join(ctx.cwd, 'test', 'fixtures')
-    return new MockAdapter(fixturesDir, workflowName, stepId)
+    return new MockAdapter(fixturesDir, workflowName, stepId, iteration)
   }
   return new ClaudeCodeAdapter(ctx.runDir, stepId)
 }
@@ -107,21 +115,22 @@ export async function runEligibleSteps(
   workflow: Workflow,
   ctx: ScheduleContext,
   resumeState?: Map<StepId, ReplayedStep>,
-): Promise<'ok' | 'failed'> {
+): Promise<'ok' | 'failed' | 'suspended'> {
   const limit = pLimit(ctx.concurrency ?? DEFAULT_CONCURRENCY)
   const producerOf = buildProducerMap(workflow.steps)
   const remaining = new Map(workflow.steps.map((s) => [s.id, s]))
   const completed = new Set<StepId>()
-  const inFlight = new Map<StepId, Promise<'ok' | 'failed'>>()
+  const inFlight = new Map<StepId, Promise<'ok' | 'failed' | 'suspended'>>()
   const artifactHashes = new Map<ArtifactName, string>()
   let failed = false
+  let suspended = false
 
   if (resumeState) trustResumedSteps(remaining, producerOf, resumeState, completed, artifactHashes)
 
   const agentSessionIds = new Map<StepId, string>()
 
   function launchEligible(): void {
-    if (failed) return
+    if (failed || suspended) return
     for (const step of remaining.values()) {
       if (inFlight.has(step.id)) continue
       if (dependenciesOf(step, producerOf).every((dep) => completed.has(dep))) {
@@ -142,16 +151,17 @@ export async function runEligibleSteps(
     inFlight.delete(doneId)
     remaining.delete(doneId)
     if (status === 'failed') failed = true
+    else if (status === 'suspended') suspended = true
     else completed.add(doneId)
     launchEligible()
   }
 
-  if (!failed && remaining.size > 0) {
+  if (!failed && !suspended && remaining.size > 0) {
     const stuck = [...remaining.keys()].join(', ')
     throw new Error(`workflow stalled: step(s) [${stuck}] never became eligible`)
   }
 
-  return failed ? 'failed' : 'ok'
+  return failed ? 'failed' : suspended ? 'suspended' : 'ok'
 }
 
 async function runStep(
@@ -160,9 +170,40 @@ async function runStep(
   artifactHashes: Map<ArtifactName, string>,
   workflowName: string,
   agentSessionIds: Map<StepId, string>,
-): Promise<'ok' | 'failed'> {
+): Promise<'ok' | 'failed' | 'suspended'> {
+  if (step.kind === 'loop') {
+    const semanticKey = computeSemanticKey(step, collectInputHashes(step, artifactHashes))
+    const definitionKey = computeDefinitionKey(step)
+    return runLoopStep(step, {
+      runId: ctx.runId,
+      runDir: ctx.runDir,
+      cwd: ctx.cwd,
+      cacheDir: ctx.cacheDir,
+      semanticKey,
+      definitionKey,
+      outerArtifactHashes: artifactHashes,
+      buildAdapter: (stepId, iteration) => buildAdapter(ctx.adapter, ctx, workflowName, stepId, iteration),
+    })
+  }
+
+  if (step.kind === 'map') {
+    const semanticKey = computeSemanticKey(step, collectInputHashes(step, artifactHashes))
+    const definitionKey = computeDefinitionKey(step)
+    return runMapStep(step, {
+      runId: ctx.runId,
+      runDir: ctx.runDir,
+      cwd: ctx.cwd,
+      cacheDir: ctx.cacheDir,
+      semanticKey,
+      definitionKey,
+      globalConcurrency: ctx.concurrency ?? DEFAULT_CONCURRENCY,
+      outerArtifactHashes: artifactHashes,
+      buildAdapter: (stepId, itemIndex) => buildAdapter(ctx.adapter, ctx, workflowName, stepId, itemIndex),
+    })
+  }
+
   if (step.kind !== 'command' && step.kind !== 'transform' && step.kind !== 'agent') {
-    throw new Error(`step "${step.id}": kind "${step.kind}" not yet supported in M1`)
+    throw new Error(`step "${step.id}": kind "${step.kind}" not yet supported in M3`)
   }
 
   const semanticKey = computeSemanticKey(step, collectInputHashes(step, artifactHashes))

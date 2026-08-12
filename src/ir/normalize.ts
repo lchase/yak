@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { AgentStep, CommandStep, Step, TransformStep, Workflow } from './types.js'
+import type { AgentStep, Budget, CommandStep, Expr, LoopStep, MapStep, Step, TransformStep, Workflow } from './types.js'
 
 const rawCommandSchema = z.object({
   run: z.string(),
@@ -27,16 +27,70 @@ const rawAgentSchema = z.object({
   repairAttempts: z.number().optional(),
 })
 
-const rawStepSchema = z.object({
-  id: z.string(),
-  needs: z.array(z.string()).optional(),
-  produces: z.string().optional(),
-  cache: z.enum(['strict', 'loose']).optional(),
-  command: rawCommandSchema.optional(),
-  transform: rawTransformSchema.optional(),
-  agent: rawAgentSchema.optional(),
+const rawExprSchema: z.ZodType<Expr> = z.union([z.string(), z.object({ fn: z.string() })])
+
+const rawBudgetSchema: z.ZodType<Budget> = z.object({
+  maxIterations: z.number(),
+  maxTokens: z.number().optional(),
+  maxUsd: z.number().optional(),
+  noProgress: z.object({ signal: rawExprSchema, rounds: z.number() }).optional(),
 })
-type RawStep = z.infer<typeof rawStepSchema>
+
+interface RawStep {
+  id: string
+  needs?: string[]
+  produces?: string
+  cache?: 'strict' | 'loose'
+  command?: z.infer<typeof rawCommandSchema>
+  transform?: z.infer<typeof rawTransformSchema>
+  agent?: z.infer<typeof rawAgentSchema>
+  loop?: {
+    until: Expr
+    budget: Budget
+    onExhausted?: 'suspend' | 'fail' | 'continue'
+    freshContext?: boolean
+    body: RawStep[]
+  }
+  map?: {
+    over: string
+    step: RawStep
+    concurrency?: number
+    isolation?: 'worktree' | 'none'
+    onItemFailure?: 'skip' | 'fail' | 'retry'
+  }
+}
+
+/** Recursive — a loop's `body` is itself a list of raw steps — so the schema
+ * must be self-referential via `z.lazy`. */
+const rawStepSchema: z.ZodType<RawStep> = z.lazy(() =>
+  z.object({
+    id: z.string(),
+    needs: z.array(z.string()).optional(),
+    produces: z.string().optional(),
+    cache: z.enum(['strict', 'loose']).optional(),
+    command: rawCommandSchema.optional(),
+    transform: rawTransformSchema.optional(),
+    agent: rawAgentSchema.optional(),
+    loop: z
+      .object({
+        until: rawExprSchema,
+        budget: rawBudgetSchema,
+        onExhausted: z.enum(['suspend', 'fail', 'continue']).optional(),
+        freshContext: z.boolean().optional(),
+        body: z.array(rawStepSchema),
+      })
+      .optional(),
+    map: z
+      .object({
+        over: z.string(),
+        step: rawStepSchema,
+        concurrency: z.number().optional(),
+        isolation: z.enum(['worktree', 'none']).optional(),
+        onItemFailure: z.enum(['skip', 'fail', 'retry']).optional(),
+      })
+      .optional(),
+  }),
+)
 
 const rawWorkflowSchema = z.object({
   name: z.string(),
@@ -90,7 +144,42 @@ function normalizeStep(raw: RawStep): Step {
     return step
   }
 
-  throw new Error(`step "${raw.id}": only "command", "transform", and "agent" steps are supported in M1`)
+  if (raw.loop) {
+    const step: LoopStep = {
+      id: raw.id,
+      needs: raw.needs ?? [],
+      cache: raw.cache ?? 'strict',
+      kind: 'loop',
+      body: raw.loop.body.map(normalizeStep),
+      until: raw.loop.until,
+      budget: raw.loop.budget,
+      onExhausted: raw.loop.onExhausted ?? 'suspend',
+      freshContext: raw.loop.freshContext ?? true,
+      ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
+    }
+    return step
+  }
+
+  if (raw.map) {
+    const step: MapStep = {
+      id: raw.id,
+      needs: raw.needs ?? [],
+      cache: raw.cache ?? 'strict',
+      kind: 'map',
+      over: raw.map.over,
+      step: normalizeStep(raw.map.step),
+      concurrency: raw.map.concurrency ?? 4,
+      // Ticket 07: the M3 loader default is 'none', not 'worktree' — real
+      // worktree isolation is M5's job, and requesting it explicitly is a
+      // load-time error (checked in ir/validate.ts), never a silent no-op.
+      isolation: raw.map.isolation ?? 'none',
+      onItemFailure: raw.map.onItemFailure ?? 'skip',
+      ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
+    }
+    return step
+  }
+
+  throw new Error(`step "${raw.id}": only "command", "transform", "agent", "loop", and "map" steps are supported`)
 }
 
 export function normalizeWorkflow(raw: unknown): Workflow {

@@ -30,3 +30,18 @@ export function dependenciesOf(step: Step, producerOf: Map<ArtifactName, StepId>
     .map((need) => producerOf.get(need))
     .filter((id): id is StepId => id !== undefined)
 }
+
+/** Every step reachable from `steps`, including a `loop`'s `body` steps and
+ * a `map`'s inner `step` — used by the load-time checks that must see into
+ * nested steps (duplicate ids, known kinds, agent tool/schema/prompt
+ * validity), as opposed to the top-level scheduler, which treats a `loop`
+ * or `map` as one opaque node and never dispatches its nested steps itself. */
+export function flattenSteps(steps: Step[]): Step[] {
+  const result: Step[] = []
+  for (const step of steps) {
+    result.push(step)
+    if (step.kind === 'loop') result.push(...flattenSteps(step.body))
+    if (step.kind === 'map') result.push(...flattenSteps([step.step]))
+  }
+  return result
+}

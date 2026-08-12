@@ -55,6 +55,27 @@ describe('MockAdapter', () => {
     ])
   })
 
+  it('ticket 08: iteration selects the starting fixture entry for a looped step', async () => {
+    await writeFixture('wf', 'test', [{ output: 'iter1-fail' }, { output: 'iter2-fail' }, { output: 'iter3-pass' }])
+
+    const iter3 = new MockAdapter(fixturesDir, 'wf', 'test', 3)
+    expect((await iter3.run(baseReq)).output).toBe('iter3-pass')
+
+    const iter1 = new MockAdapter(fixturesDir, 'wf', 'test', 1)
+    expect((await iter1.run(baseReq)).output).toBe('iter1-fail')
+  })
+
+  it('ticket 08: within one iteration, further calls (schema repair) still advance past the iteration start', async () => {
+    await writeFixture('wf', 'test', [{ output: 'a' }, { output: 'b' }, { output: 'c' }])
+    const adapter = new MockAdapter(fixturesDir, 'wf', 'test', 2)
+
+    const first = await adapter.run(baseReq)
+    const second = await adapter.run(baseReq)
+
+    expect(first.output).toBe('b')
+    expect(second.output).toBe('c')
+  })
+
   it('ignores sessionId and tools on the request', async () => {
     await writeFixture('wf', 'step', [{ output: 'a' }, { output: 'b' }])
     const adapter = new MockAdapter(fixturesDir, 'wf', 'step')

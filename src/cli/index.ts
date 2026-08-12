@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
 import type { AdapterId } from '../ir/types.js'
+import { artifactsCommand } from './commands/artifacts.js'
 import { resumeCommand } from './commands/resume.js'
 import { runCommand } from './commands/run.js'
 import { statusCommand } from './commands/status.js'
@@ -43,6 +44,14 @@ program
   .argument('[run-id]', 'id of the run to report on (default: most recent)')
   .action(async (runId: string | undefined) => {
     process.exitCode = await statusCommand(runId)
+  })
+
+program
+  .command('artifacts')
+  .description("List a map step's per-item artifact files for a run")
+  .argument('[run-id]', 'id of the run to report on (default: most recent)')
+  .action(async (runId: string | undefined) => {
+    process.exitCode = await artifactsCommand(runId)
   })
 
 program.parse()

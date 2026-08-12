@@ -21,7 +21,7 @@ export interface ExecuteOptions {
 export interface ExecuteResult {
   runId: string
   runDir: string
-  status: 'ok' | 'failed'
+  status: 'ok' | 'failed' | 'suspended'
 }
 
 export function defaultRunsDir(): string {
@@ -102,6 +102,21 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
   const workflow = await readRunWorkflow(runDir)
 
   const events = await readJournal(runDir)
+
+  // Ticket 04: a loop-exhausted run is unresumable in M3 — there is no
+  // gate/answer protocol yet (M4's job) to give `yak resume` anything to
+  // act on, so it fails loud rather than silently re-entering the loop
+  // with a fresh budget (which would mask a genuinely stuck loop) or
+  // no-op re-reporting the suspended state (redundant with `yak status`).
+  const lastSuspended = [...events].reverse().find((e) => e.t === 'run.suspended')
+  if (lastSuspended && lastSuspended.t === 'run.suspended' && lastSuspended.reason !== 'gate') {
+    throw new Error(
+      `run ${runId} is suspended (loop "${lastSuspended.loopStepId}" exhausted: ` +
+        `${lastSuspended.tripped}) — resuming a loop-exhausted run isn't implemented ` +
+        `until M4's gate/answer protocol lands`,
+    )
+  }
+
   const resumeState = completedStepsFromJournal(events)
 
   // Ticket 09: the adapter choice is a per-run constant, persisted on

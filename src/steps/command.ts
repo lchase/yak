@@ -18,7 +18,11 @@ export class CommandStepFailedError extends Error {
   }
 }
 
-export function runCommandStep(step: CommandStep, cwd: string): CommandResult {
+/** `extraEnv` is how a `map` item step reaches its own item — the minimal
+ * per-item data channel a shell command has, the analog of an agent
+ * step's `{{...}}` prompt templating. Merged over the inherited
+ * environment, never replacing it. */
+export function runCommandStep(step: CommandStep, cwd: string, extraEnv?: Record<string, string>): CommandResult {
   const capture = step.capture ?? ['stdout', 'stderr', 'exitCode']
   const failOn = step.failOn ?? 'exitCode'
 
@@ -26,6 +30,7 @@ export function runCommandStep(step: CommandStep, cwd: string): CommandResult {
     cwd: step.cwd ?? cwd,
     shell: true,
     encoding: 'utf8',
+    ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
   })
 
   if (spawned.error) {

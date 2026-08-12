@@ -61,10 +61,15 @@ export function computeDefinitionKey(step: Step): string {
   return sha256(JSON.stringify({ def: definitionPayload(step), engineVersion: ENGINE_VERSION }))
 }
 
-/** spec §4.4: semanticKey = sha256(step id + input artifact hashes + adapter id + model id) */
+/** spec §4.4: semanticKey = sha256(step id + input artifact hashes + adapter id + model id).
+ * Ticket 10 / ticket 06: the same numeric slot folds in a loop body step's
+ * iteration number or a map item's index — same shape either way, so
+ * resume reuses completed iterations/items and only re-runs from the
+ * interrupted one forward. Defaults to 0 for a step that's neither. */
 export function computeSemanticKey(
   step: Step,
   inputArtifactHashes: Record<ArtifactName, string>,
+  iteration = 0,
 ): string {
   const inputs = Object.keys(inputArtifactHashes)
     .sort()
@@ -72,7 +77,7 @@ export function computeSemanticKey(
     .join(',')
   const adapterId = step.kind === 'agent' ? 'default' : ''
   const modelId = step.kind === 'agent' ? (step.model ?? '') : ''
-  return sha256(`${step.id}|${inputs}|${adapterId}|${modelId}`)
+  return sha256(`${step.id}|${inputs}|${adapterId}|${modelId}|${iteration}`)
 }
 
 /**

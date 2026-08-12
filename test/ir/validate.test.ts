@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { validateWorkflow, WorkflowValidationError } from '../../src/ir/validate.js'
-import type { AgentStep, CommandStep, LoopStep, Step, Workflow } from '../../src/ir/types.js'
+import type { AgentStep, CommandStep, LoopStep, MapStep, Step, Workflow } from '../../src/ir/types.js'
 
 function workflow(steps: Step[]): Workflow {
   return { name: 'w', version: '1', steps }
@@ -15,6 +15,10 @@ function command(overrides: Partial<CommandStep> & Pick<CommandStep, 'id'>): Com
 
 function agent(overrides: Partial<AgentStep> & Pick<AgentStep, 'id'>): AgentStep {
   return { kind: 'agent', prompt: { inline: 'hi' }, ...overrides }
+}
+
+function map(overrides: Partial<MapStep> & Pick<MapStep, 'id' | 'over' | 'step'>): MapStep {
+  return { kind: 'map', isolation: 'none', ...overrides }
 }
 
 describe('validateWorkflow', () => {
@@ -76,6 +80,74 @@ describe('validateWorkflow', () => {
       loop,
     ])
     await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+  })
+
+  describe('ticket 07: isolation: "none" write-race guardrail', () => {
+    it('rejects concurrency > 1 with a write-capable tool (Edit) on the item step', async () => {
+      const wf = workflow([
+        command({ id: 'files', produces: 'changed-files' }),
+        map({
+          id: 'review',
+          over: 'changed-files',
+          concurrency: 5,
+          step: agent({ id: 'review-one', tools: ['Read', 'Edit'] }),
+        }),
+      ])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/isolation: 'none'.*concurrency.*write/is)
+    })
+
+    it('rejects concurrency > 1 with Bash on the item step — Bash counts as write-capable', async () => {
+      const wf = workflow([
+        command({ id: 'files', produces: 'changed-files' }),
+        map({
+          id: 'review',
+          over: 'changed-files',
+          concurrency: 2,
+          step: agent({ id: 'review-one', tools: ['Bash'] }),
+        }),
+      ])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/isolation: 'none'/)
+    })
+
+    it('allows concurrency > 1 with only read-only tools on the item step', async () => {
+      const wf = workflow([
+        command({ id: 'files', produces: 'changed-files' }),
+        map({
+          id: 'review',
+          over: 'changed-files',
+          concurrency: 5,
+          step: agent({ id: 'review-one', tools: ['Read', 'Grep'] }),
+        }),
+      ])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
+
+    it('allows concurrency: 1 with write-capable tools — no concurrent writers to race', async () => {
+      const wf = workflow([
+        command({ id: 'files', produces: 'changed-files' }),
+        map({
+          id: 'review',
+          over: 'changed-files',
+          concurrency: 1,
+          step: agent({ id: 'review-one', tools: ['Edit'] }),
+        }),
+      ])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
+
+    it('allows isolation: "worktree" with concurrency > 1 and write tools — different isolation, no shared cwd', async () => {
+      const wf = workflow([
+        command({ id: 'files', produces: 'changed-files' }),
+        map({
+          id: 'review',
+          over: 'changed-files',
+          isolation: 'worktree',
+          concurrency: 5,
+          step: agent({ id: 'review-one', tools: ['Edit'] }),
+        }),
+      ])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/'worktree'.*not.*supported|M5/is)
+    })
   })
 
   describe('agent step tool names', () => {

@@ -38,6 +38,36 @@ describe('computeSemanticKey', () => {
     const key2 = computeSemanticKey(command({ id: 'b' }), {})
     expect(key1).not.toBe(key2)
   })
+
+  it('changes when the iteration number changes, same step id and inputs', () => {
+    const step = command({ id: 'a' })
+    const key1 = computeSemanticKey(step, { input: 'hash1' }, 1)
+    const key2 = computeSemanticKey(step, { input: 'hash1' }, 2)
+    expect(key1).not.toBe(key2)
+  })
+
+  it('is stable for the same iteration number', () => {
+    const step = command({ id: 'a' })
+    const key1 = computeSemanticKey(step, { input: 'hash1' }, 1)
+    const key2 = computeSemanticKey(step, { input: 'hash1' }, 1)
+    expect(key1).toBe(key2)
+  })
+
+  it('omitting iteration matches iteration 0 (default for non-loop steps)', () => {
+    const step = command({ id: 'a' })
+    const key1 = computeSemanticKey(step, { input: 'hash1' })
+    const key2 = computeSemanticKey(step, { input: 'hash1' }, 0)
+    expect(key1).toBe(key2)
+  })
+
+  it('ticket 06: the same numeric slot doubles as a map item index — differs per item, stable per item', () => {
+    const step = command({ id: 'review-files' })
+    const item0a = computeSemanticKey(step, { file: 'hashA' }, 0)
+    const item0b = computeSemanticKey(step, { file: 'hashA' }, 0)
+    const item1 = computeSemanticKey(step, { file: 'hashA' }, 1)
+    expect(item0a).toBe(item0b)
+    expect(item0a).not.toBe(item1)
+  })
 })
 
 describe('computeDefinitionKey', () => {

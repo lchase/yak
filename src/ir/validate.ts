@@ -3,7 +3,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ZodType } from 'zod'
 import { extractTemplateRoots } from '../expr/template.js'
-import { agentInputNames, buildProducerMap, dependenciesOf } from './graph.js'
+import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps } from './graph.js'
 import type { ArtifactName, Expr, Step, StepId, Workflow } from './types.js'
 
 export class WorkflowValidationError extends Error {}
@@ -41,16 +41,55 @@ const KNOWN_AGENT_TOOLS = new Set([
 ])
 
 export async function validateWorkflow(workflow: Workflow, cwd: string = process.cwd()): Promise<void> {
-  checkKnownKinds(workflow.steps)
-  checkDuplicateIds(workflow.steps)
+  const flatSteps = flattenSteps(workflow.steps)
+  checkKnownKinds(flatSteps)
+  checkDuplicateIds(flatSteps)
   const producerOf = buildProducerMap(workflow.steps)
   checkNeedsSatisfied(workflow.steps, producerOf)
   checkNoCycles(workflow.steps, producerOf)
   checkExitCodeReads(workflow.steps, producerOf)
-  checkAgentToolNames(workflow.steps)
-  await checkAgentSchemaKeys(workflow.steps, cwd)
-  await checkAgentPromptPlaceholders(workflow.steps, cwd)
-  checkSessionChainDepth(workflow.steps)
+  checkAgentToolNames(flatSteps)
+  await checkAgentSchemaKeys(flatSteps, cwd)
+  await checkAgentPromptPlaceholders(flatSteps, cwd)
+  checkSessionChainDepth(flatSteps)
+  checkMapIsolation(workflow.steps)
+}
+
+/** Ticket 07: real worktree isolation is M5's job — requesting it explicitly
+ * is a load-time error in M3, not a silent no-op. `isolation: 'none'` (the
+ * M3 default) means concurrent items literally share one process cwd, so
+ * `concurrency > 1` with a write-capable item step (`Edit`, `Write`, or
+ * `Bash` — `Bash` counts as write-capable since the engine can't tell
+ * read-only shell usage from a mutating one) is a structural race the
+ * loader can catch, not a caller footgun to document and hope is avoided. */
+const WRITE_CAPABLE_TOOLS = new Set(['Edit', 'Write', 'Bash'])
+
+function checkMapIsolation(steps: Step[]): void {
+  for (const step of steps) {
+    if (step.kind === 'loop') checkMapIsolation(step.body)
+    if (step.kind !== 'map') continue
+
+    if (step.isolation === 'worktree') {
+      throw new WorkflowValidationError(
+        `step "${step.id}": isolation: 'worktree' is not supported until M5 — use isolation: 'none' ` +
+          `(M3's default) or omit isolation`,
+      )
+    }
+
+    const concurrency = step.concurrency ?? 4
+    if (concurrency > 1 && step.step.kind === 'agent') {
+      const writeTool = (step.step.tools ?? []).find((tool) => WRITE_CAPABLE_TOOLS.has(tool))
+      if (writeTool) {
+        throw new WorkflowValidationError(
+          `step "${step.id}": isolation: 'none' with concurrency ${concurrency} and item step ` +
+            `"${step.step.id}" declaring write-capable tool "${writeTool}" — concurrent items would ` +
+            `share one cwd and race; use concurrency: 1 or drop the write-capable tool`,
+        )
+      }
+    }
+
+    checkMapIsolation([step.step])
+  }
 }
 
 function checkAgentToolNames(steps: Step[]): void {
@@ -85,6 +124,11 @@ function checkDuplicateIds(steps: Step[]): void {
   }
 }
 
+/** Ticket 01: a body step's `needs` resolves first against its own loop's
+ * local producer map (other body steps), falling through to the outer
+ * scope's producer map — an artifact produced only inside a loop is never
+ * visible outside it, so the outer scope passed to a nested loop is never
+ * widened with that loop's own locals. */
 function checkNeedsSatisfied(steps: Step[], producerOf: Map<ArtifactName, StepId>): void {
   for (const step of steps) {
     for (const need of step.needs ?? []) {
@@ -93,6 +137,13 @@ function checkNeedsSatisfied(steps: Step[], producerOf: Map<ArtifactName, StepId
           `step "${step.id}": needs artifact "${need}" but no step produces it`,
         )
       }
+    }
+    if (step.kind === 'loop') {
+      const localProducerOf = new Map([...producerOf, ...buildProducerMap(step.body)])
+      checkNeedsSatisfied(step.body, localProducerOf)
+    }
+    if (step.kind === 'map') {
+      checkNeedsSatisfied([step.step], producerOf)
     }
   }
 }

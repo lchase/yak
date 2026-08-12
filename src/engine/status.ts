@@ -1,4 +1,4 @@
-import type { JournalEnvelope, Step, StepId } from '../ir/types.js'
+import type { JournalEnvelope, LoopStep, Step, StepId } from '../ir/types.js'
 
 export type StepState = 'completed' | 'cached' | 'stale' | 'failed' | 'pending'
 
@@ -27,4 +27,60 @@ export function stepStatusesFromJournal(steps: Step[], events: JournalEnvelope[]
   }
 
   return steps.map((step) => ({ stepId: step.id, status: stateByStep.get(step.id) ?? 'pending' }))
+}
+
+export type LoopState = 'pending' | 'running' | 'completed' | 'failed' | 'suspended'
+
+export interface LoopStatusDetail {
+  stepId: StepId
+  state: LoopState
+  /** Highest iteration any body step has started, 0 if none yet — the
+   * loop's own step.started/step.completed don't carry an iteration, so
+   * this reads the body steps' `step.started` events instead. */
+  iteration: number
+  maxIterations: number
+  consumedTokens: number
+  maxTokens?: number
+  noProgressSignal?: unknown
+}
+
+/**
+ * Ticket 09: `yak status` detail for a run currently (or having been) inside
+ * a `loop` — current iteration, budget consumed vs. each configured
+ * ceiling, and the latest `noProgress` signal value. All three are already
+ * computed for enforcement (tickets 02/03); this only reads them back from
+ * the journal.
+ */
+export function loopStatusFromJournal(step: LoopStep, events: JournalEnvelope[]): LoopStatusDetail {
+  const bodyStepIds = new Set(step.body.map((s) => s.id))
+
+  let state: LoopState = 'pending'
+  for (const event of events) {
+    if (event.t === 'step.started' && event.stepId === step.id) state = 'running'
+    else if (event.t === 'step.completed' && event.stepId === step.id) state = 'completed'
+    else if (event.t === 'step.failed' && event.stepId === step.id) state = 'failed'
+    else if (event.t === 'run.suspended' && event.loopStepId === step.id) state = 'suspended'
+  }
+
+  const iteration = events
+    .filter((e) => e.t === 'step.started' && bodyStepIds.has(e.stepId))
+    .reduce((max, e) => Math.max(max, (e as { iteration?: number }).iteration ?? 0), 0)
+
+  const consumedTokens = events
+    .filter((e) => e.t === 'budget.consumed' && bodyStepIds.has(e.stepId))
+    .reduce((sum, e) => sum + (e as { tokens: number }).tokens, 0)
+
+  const lastIterationEvent = [...events].reverse().find((e) => e.t === 'loop.iteration' && e.stepId === step.id)
+  const noProgressSignal =
+    lastIterationEvent?.t === 'loop.iteration' ? lastIterationEvent.signal : undefined
+
+  return {
+    stepId: step.id,
+    state,
+    iteration,
+    maxIterations: step.budget.maxIterations,
+    consumedTokens,
+    ...(step.budget.maxTokens !== undefined ? { maxTokens: step.budget.maxTokens } : {}),
+    ...(noProgressSignal !== undefined ? { noProgressSignal } : {}),
+  }
 }

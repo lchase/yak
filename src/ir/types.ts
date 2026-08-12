@@ -91,15 +91,18 @@ export type JournalEvent =
   | { t: 'run.started';      runId: string; workflow: string; inputHash: string; adapter: AdapterId }
   | { t: 'step.started';     stepId: StepId; iteration?: number
                              semanticKey: string; definitionKey: string }
-  | { t: 'step.completed';   stepId: StepId; artifact?: ArtifactName
+  | { t: 'step.completed';   stepId: StepId; iteration?: number; artifact?: ArtifactName
                              artifactHash?: string; cached: boolean; stale?: boolean }
-  | { t: 'step.failed';      stepId: StepId; failure: StepFailure }
+  | { t: 'step.failed';      stepId: StepId; iteration?: number; failure: StepFailure }
   | { t: 'artifact.written'; name: ArtifactName; hash: string; bytes: number }
   | { t: 'budget.consumed';  stepId: StepId; tokens: number; usd?: number }
   | { t: 'loop.iteration';   stepId: StepId; n: number; signal?: unknown }
+  | { t: 'map.item.retried'; mapStepId: StepId; itemIndex: number; attempt: number; error: string }
   | { t: 'gate.opened';      stepId: StepId; requestPath: string }
   | { t: 'gate.answered';    stepId: StepId }
-  | { t: 'run.suspended';    reason: 'gate' | 'budget' | 'exhausted' }
+  | { t: 'run.suspended';    reason: 'gate' | 'budget' | 'exhausted'
+                             loopStepId?: StepId; iteration?: number
+                             tripped?: 'maxIterations' | 'maxTokens' | 'noProgress' }
   | { t: 'run.finished';     status: 'ok' | 'failed' | 'suspended' }
 
 export type JournalEnvelope = JournalEvent & { at: string; runId: string }
