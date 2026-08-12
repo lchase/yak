@@ -85,8 +85,10 @@ export interface StepFailure {
   recoverable: boolean
 }
 
+export type AdapterId = 'mock' | 'claude-code'
+
 export type JournalEvent =
-  | { t: 'run.started';      runId: string; workflow: string; inputHash: string }
+  | { t: 'run.started';      runId: string; workflow: string; inputHash: string; adapter: AdapterId }
   | { t: 'step.started';     stepId: StepId; iteration?: number
                              semanticKey: string; definitionKey: string }
   | { t: 'step.completed';   stepId: StepId; artifact?: ArtifactName

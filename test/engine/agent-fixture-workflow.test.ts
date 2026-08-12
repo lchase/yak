@@ -15,8 +15,8 @@ describe('M1 acceptance workflow: agent -> agent -> command -> transform (mock a
   it('runs deterministically: repeated runs produce identical artifacts', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
 
-    const first = await executeWorkflowFile(WORKFLOW, { runsDir: path.join(dir, 'run1', '.runs') })
-    const second = await executeWorkflowFile(WORKFLOW, { runsDir: path.join(dir, 'run2', '.runs') })
+    const first = await executeWorkflowFile(WORKFLOW, { runsDir: path.join(dir, 'run1', '.runs'), adapter: 'mock' })
+    const second = await executeWorkflowFile(WORKFLOW, { runsDir: path.join(dir, 'run2', '.runs'), adapter: 'mock' })
 
     expect(first.status).toBe('ok')
     expect(second.status).toBe('ok')
@@ -27,7 +27,7 @@ describe('M1 acceptance workflow: agent -> agent -> command -> transform (mock a
   it('exercises fresh context on triage and context.inherit on plan, interpolating triage into the prompt', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
 
-    const result = await executeWorkflowFile(WORKFLOW, { runsDir: path.join(dir, '.runs') })
+    const result = await executeWorkflowFile(WORKFLOW, { runsDir: path.join(dir, '.runs'), adapter: 'mock' })
 
     expect(result.status).toBe('ok')
     const triage = (await readArtifact(result.runDir, 'triage')) as { summary: string; confidence: number }
@@ -46,7 +46,7 @@ describe('M1 acceptance workflow: agent -> agent -> command -> transform (mock a
   it('repairs plan once (invalid then valid) with no .rejected file and one budget.consumed per call', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
 
-    const result = await executeWorkflowFile(WORKFLOW, { runsDir: path.join(dir, '.runs') })
+    const result = await executeWorkflowFile(WORKFLOW, { runsDir: path.join(dir, '.runs'), adapter: 'mock' })
 
     expect(result.status).toBe('ok')
 

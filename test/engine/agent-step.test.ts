@@ -45,6 +45,7 @@ describe('agent step end to end (mock adapter)', () => {
     const result = await executeWorkflowFile(workflowPath, {
       runsDir: path.join(dir, '.runs'),
       cwd: dir,
+      adapter: 'mock',
     })
 
     expect(result.status).toBe('ok')
@@ -91,6 +92,7 @@ describe('agent step end to end (mock adapter)', () => {
     const result = await executeWorkflowFile(workflowPath, {
       runsDir: path.join(dir, '.runs'),
       cwd: dir,
+      adapter: 'mock',
     })
 
     expect(result.status).toBe('ok')
@@ -124,6 +126,7 @@ describe('agent step end to end (mock adapter)', () => {
     const result = await executeWorkflowFile(workflowPath, {
       runsDir: path.join(dir, '.runs'),
       cwd: dir,
+      adapter: 'mock',
     })
 
     expect(result.status).toBe('failed')

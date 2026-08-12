@@ -21,7 +21,13 @@ async function writeCompletedRun(runsDir: string, runId: string): Promise<void> 
   const runDir = path.join(runsDir, runId)
   await mkdir(runDir, { recursive: true })
   await writeFile(path.join(runDir, 'workflow.json'), JSON.stringify(MINIMAL_WORKFLOW, null, 2), 'utf8')
-  await appendJournalEvent(runDir, runId, { t: 'run.started', runId, workflow: 'minimal', inputHash: 'irrelevant' })
+  await appendJournalEvent(runDir, runId, {
+    t: 'run.started',
+    runId,
+    workflow: 'minimal',
+    inputHash: 'irrelevant',
+    adapter: 'mock',
+  })
   await appendJournalEvent(runDir, runId, {
     t: 'step.started',
     stepId: 'greet',

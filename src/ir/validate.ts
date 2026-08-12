@@ -10,6 +10,36 @@ export class WorkflowValidationError extends Error {}
 
 const KNOWN_KINDS = new Set(['agent', 'command', 'transform', 'gate', 'map', 'loop'])
 
+/**
+ * M2 ticket 01 ("tools mapping to SDK allowedTools"): the confirmed,
+ * yak-usable subset of the Claude Agent SDK's public tool names. The SDK's
+ * shipped `.d.ts` defines more names than this — internal Claude
+ * Code/product surface, not stable third-party API — so only this list is
+ * accepted here rather than deferring to the SDK's own (undocumented)
+ * unknown-tool-name behavior.
+ *
+ * `AskUserQuestion` is deliberately excluded (ticket 10's addendum):
+ * interactive tools always fall through to a `canUseTool` callback
+ * regardless of `permissionMode`, including `bypassPermissions`, and yak
+ * has no such callback wired (agent steps have no channel to ask a human,
+ * spec §3.6) — declaring it would stall the step at runtime instead of
+ * failing at load time.
+ */
+const KNOWN_AGENT_TOOLS = new Set([
+  'Read',
+  'Edit',
+  'Write',
+  'Bash',
+  'Grep',
+  'Glob',
+  'WebFetch',
+  'WebSearch',
+  'NotebookEdit',
+  'TodoWrite',
+  'Task',
+  'Skill',
+])
+
 export async function validateWorkflow(workflow: Workflow, cwd: string = process.cwd()): Promise<void> {
   checkKnownKinds(workflow.steps)
   checkDuplicateIds(workflow.steps)
@@ -17,9 +47,24 @@ export async function validateWorkflow(workflow: Workflow, cwd: string = process
   checkNeedsSatisfied(workflow.steps, producerOf)
   checkNoCycles(workflow.steps, producerOf)
   checkExitCodeReads(workflow.steps, producerOf)
+  checkAgentToolNames(workflow.steps)
   await checkAgentSchemaKeys(workflow.steps, cwd)
   await checkAgentPromptPlaceholders(workflow.steps, cwd)
   checkSessionChainDepth(workflow.steps)
+}
+
+function checkAgentToolNames(steps: Step[]): void {
+  for (const step of steps) {
+    if (step.kind !== 'agent') continue
+    for (const tool of step.tools ?? []) {
+      if (!KNOWN_AGENT_TOOLS.has(tool)) {
+        throw new WorkflowValidationError(
+          `step "${step.id}": unknown or unsupported tool "${tool}" — must be one of ` +
+            `${[...KNOWN_AGENT_TOOLS].join(', ')}`,
+        )
+      }
+    }
+  }
 }
 
 function checkKnownKinds(steps: Step[]): void {

@@ -39,6 +39,7 @@ async function setUpInterruptedRun(dir: string): Promise<{
     runId,
     workflow: workflow.name,
     inputHash: 'irrelevant',
+    adapter: 'mock',
   })
 
   const install = workflow.steps.find((s) => s.id === 'install') as CommandStep

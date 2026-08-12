@@ -3,16 +3,19 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { loadWorkflowYaml } from '../ir/load.js'
 import { normalizeWorkflow } from '../ir/normalize.js'
-import type { Workflow } from '../ir/types.js'
+import type { AdapterId, Workflow } from '../ir/types.js'
 import { validateWorkflow } from '../ir/validate.js'
 import { sha256 } from '../util/hash.js'
 import { appendJournalEvent, completedStepsFromJournal, readJournal } from './journal.js'
 import { runEligibleSteps } from './scheduler.js'
 
+const DEFAULT_ADAPTER: AdapterId = 'claude-code'
+
 export interface ExecuteOptions {
   runsDir?: string
   cwd?: string
   cacheDir?: string
+  adapter?: AdapterId
 }
 
 export interface ExecuteResult {
@@ -47,6 +50,7 @@ export async function executeWorkflowFile(
   opts: ExecuteOptions = {},
 ): Promise<ExecuteResult> {
   const { runsDir, cwd, cacheDir } = resolveDirs(opts.runsDir, opts.cwd, opts.cacheDir)
+  const adapter = opts.adapter ?? DEFAULT_ADAPTER
 
   const raw = await loadWorkflowYaml(workflowPath)
   const workflow = normalizeWorkflow(raw)
@@ -62,9 +66,10 @@ export async function executeWorkflowFile(
     runId,
     workflow: workflow.name,
     inputHash: sha256(JSON.stringify(workflow)),
+    adapter,
   })
 
-  const status = await runEligibleSteps(workflow, { runId, runDir, cwd, cacheDir })
+  const status = await runEligibleSteps(workflow, { runId, runDir, cwd, cacheDir, adapter })
 
   await appendJournalEvent(runDir, runId, { t: 'run.finished', status })
 
@@ -99,7 +104,23 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
   const events = await readJournal(runDir)
   const resumeState = completedStepsFromJournal(events)
 
-  const status = await runEligibleSteps(workflow, { runId, runDir, cwd, cacheDir }, resumeState)
+  // Ticket 09: the adapter choice is a per-run constant, persisted on
+  // `run.started` — resuming under a different adapter than the run
+  // started with would mix real/fake steps in one journal, so an explicit
+  // conflicting override is rejected rather than silently honored.
+  const startedEvent = events.find((e) => e.t === 'run.started')
+  const persistedAdapter = startedEvent?.adapter ?? DEFAULT_ADAPTER
+  if (opts.adapter !== undefined && opts.adapter !== persistedAdapter) {
+    throw new Error(
+      `run ${runId} started with adapter "${persistedAdapter}" — cannot resume with adapter "${opts.adapter}"`,
+    )
+  }
+
+  const status = await runEligibleSteps(
+    workflow,
+    { runId, runDir, cwd, cacheDir, adapter: persistedAdapter },
+    resumeState,
+  )
 
   await appendJournalEvent(runDir, runId, { t: 'run.finished', status })
 

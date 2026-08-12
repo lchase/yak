@@ -1,8 +1,16 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
+import type { AdapterId } from '../ir/types.js'
 import { resumeCommand } from './commands/resume.js'
 import { runCommand } from './commands/run.js'
 import { statusCommand } from './commands/status.js'
+
+function requireAdapterId(value: string): AdapterId {
+  if (value !== 'mock' && value !== 'claude-code') {
+    throw new Error(`--adapter must be "mock" or "claude-code", got "${value}"`)
+  }
+  return value
+}
 
 const program = new Command()
 
@@ -15,16 +23,18 @@ program
   .command('run')
   .description('Run a workflow YAML file')
   .argument('<workflow>', 'path to the workflow YAML file')
-  .action(async (workflow: string) => {
-    process.exitCode = await runCommand(workflow)
+  .option('--adapter <adapter>', 'agent adapter to use', 'claude-code')
+  .action(async (workflow: string, options: { adapter: string }) => {
+    process.exitCode = await runCommand(workflow, requireAdapterId(options.adapter))
   })
 
 program
   .command('resume')
   .description('Resume an interrupted run')
   .argument('<run-id>', 'id of the run to resume')
-  .action(async (runId: string) => {
-    process.exitCode = await resumeCommand(runId)
+  .option('--adapter <adapter>', 'must match the adapter the run started with, if given')
+  .action(async (runId: string, options: { adapter?: string }) => {
+    process.exitCode = await resumeCommand(runId, options.adapter ? requireAdapterId(options.adapter) : undefined)
   })
 
 program

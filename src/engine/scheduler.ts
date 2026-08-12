@@ -1,9 +1,11 @@
 import path from 'node:path'
 import pLimit from 'p-limit'
 import { z } from 'zod'
+import { ClaudeCodeAdapter } from '../adapters/claude-code.js'
 import { MockAdapter } from '../adapters/mock.js'
+import type { AgentAdapter } from '../adapters/types.js'
 import { agentInputNames, buildProducerMap, dependenciesOf, inputNamesOf } from '../ir/graph.js'
-import type { ArtifactName, Step, StepId, Workflow } from '../ir/types.js'
+import type { AdapterId, ArtifactName, Step, StepId, Workflow } from '../ir/types.js'
 import { AgentStepFailedError, runAgentStep } from '../steps/agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from '../steps/command.js'
 import { runTransformStep } from '../steps/transform.js'
@@ -25,7 +27,20 @@ export interface ScheduleContext {
   runDir: string
   cwd: string
   cacheDir: string
+  adapter: AdapterId
   concurrency?: number
+}
+
+/** Ticket 09: `mock` is fixture-driven (keyed by workflow name + step id
+ * under `test/fixtures`), so it's only useful when fixtures exist for the
+ * exact workflow — still CLI-reachable for manual smoke-testing and the
+ * eventual M2 acceptance run (ticket 08), not test-harness-only. */
+function buildAdapter(adapterId: AdapterId, ctx: ScheduleContext, workflowName: string, stepId: StepId): AgentAdapter {
+  if (adapterId === 'mock') {
+    const fixturesDir = path.join(ctx.cwd, 'test', 'fixtures')
+    return new MockAdapter(fixturesDir, workflowName, stepId)
+  }
+  return new ClaudeCodeAdapter(ctx.runDir, stepId)
 }
 
 function collectInputHashes(
@@ -202,8 +217,7 @@ async function runStep(
         typeof step.context === 'object' && 'session' in step.context
           ? agentSessionIds.get(step.context.session)
           : undefined
-      const fixturesDir = path.join(ctx.cwd, 'test', 'fixtures')
-      const adapter = new MockAdapter(fixturesDir, workflowName, step.id)
+      const adapter = buildAdapter(ctx.adapter, ctx, workflowName, step.id)
       result = await runAgentStep(
         step,
         inputs,

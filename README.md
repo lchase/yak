@@ -8,10 +8,15 @@ exactly where they stopped.
 
 Status: M0 done. M1 done — `mock` adapter, `agent` step, Zod schema
 validation, schema repair loop; the `agent → agent → command → transform`
-reference-workflow subset runs deterministically against fixtures. See
-`spec.md` §8 and `.scratch/yak-m1/`.
+reference-workflow subset runs deterministically against fixtures. M2's
+`claude-code` adapter is implemented (wraps the Claude Agent SDK's
+`query()` — tools/model/permissionMode/resume mapping, `sessions/<step>
+.jsonl` streaming, structured output, the failure-mode → `StepFailure`
+table); the one-real-defect acceptance run itself is still open, tracked
+at `.scratch/yak-m2/issues/08-pick-target-defect.md`. See `spec.md` §8 and
+`.scratch/yak-m2/`.
 
-## Current capabilities (M0 + M1)
+## Current capabilities (M0 + M1 + M2 adapter)
 
 M0 is zero-AI by design — a boring shell pipeline has to cache, resume, and
 journal correctly before nondeterministic steps go anywhere near it.
@@ -45,7 +50,12 @@ journal correctly before nondeterministic steps go anywhere near it.
   state (`completed`/`cached`/`stale`/`failed`/`pending`), with no db or
   extra durable state beyond the journal. Defaults to the most recent run
   when `<run-id>` is omitted.
+- **Adapters:** `mock` (fixture-driven, deterministic, free) and
+  `claude-code` (real, wraps `@anthropic-ai/claude-agent-sdk`). Selected
+  with `yak run --adapter mock|claude-code` (default `claude-code`);
+  `yak resume` replays the run's original choice and rejects a conflicting
+  `--adapter` override. `claude-code.ts`'s own tests stub `query()` at the
+  module boundary — CI never calls a real model, per CLAUDE.md.
 
-Not yet implemented: gate/map/loop step execution, the real `claude-code`
-adapter, budget enforcement, worktree isolation, the CLI beyond
-`run`/`resume`/`status`.
+Not yet implemented: gate/map/loop step execution, budget enforcement,
+worktree isolation, the CLI beyond `run`/`resume`/`status`.

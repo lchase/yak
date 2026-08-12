@@ -78,6 +78,23 @@ describe('validateWorkflow', () => {
     await expect(validateWorkflow(wf)).resolves.toBeUndefined()
   })
 
+  describe('agent step tool names', () => {
+    it('accepts known tool names', async () => {
+      const wf = workflow([agent({ id: 'code', tools: ['Read', 'Edit', 'Bash'] })])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
+
+    it('rejects an unknown tool name', async () => {
+      const wf = workflow([agent({ id: 'code', tools: ['Read', 'Frobnicate'] })])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/unknown or unsupported tool "Frobnicate"/)
+    })
+
+    it('rejects AskUserQuestion — no canUseTool channel to resolve it', async () => {
+      const wf = workflow([agent({ id: 'code', tools: ['AskUserQuestion'] })])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/unknown or unsupported tool "AskUserQuestion"/)
+    })
+  })
+
   describe('agent step schema keys', () => {
     let cwd: string
 
