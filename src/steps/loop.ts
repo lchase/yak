@@ -9,6 +9,7 @@ import {
   writeCacheEntry,
 } from '../engine/cache.js'
 import { appendJournalEvent, readJournal } from '../engine/journal.js'
+import { writeLoopExhaustedRequest } from '../engine/suspend.js'
 import { evalExpr } from '../expr/eval.js'
 import { buildProducerMap, inputNamesOf } from '../ir/graph.js'
 import type { ArtifactName, LoopStep, Step, StepId } from '../ir/types.js'
@@ -32,6 +33,17 @@ export interface LoopRunContext {
    * body step's cache key. */
   outerArtifactHashes: Map<ArtifactName, string>
   buildAdapter: (stepId: StepId, iteration: number) => AgentAdapter
+  /** M4 ticket 02/06: set by the scheduler from `ScheduleContext.loopContinuations`
+   * when `yak resume` just validated a human's answer to this loop's
+   * exhaustion request. Consumed once, at the top of `runLoopStep`. */
+  loopContinuation?: { action: 'continue' | 'abort'; addIterations?: number }
+}
+
+interface ResumeFrom {
+  startIteration: number
+  priorValues: Map<ArtifactName, unknown>
+  priorHashes: Map<ArtifactName, string>
+  maxIterations: number
 }
 
 /** Ticket 01/02/03/04/10: runs a `loop` step to completion — success
@@ -55,7 +67,21 @@ export async function runLoopStep(step: LoopStep, ctx: LoopRunContext): Promise<
     definitionKey: ctx.definitionKey,
   })
 
-  const status = await runLoopBody(step, ctx)
+  if (ctx.loopContinuation?.action === 'abort') {
+    await appendJournalEvent(ctx.runDir, ctx.runId, {
+      t: 'step.failed',
+      stepId: step.id,
+      failure: {
+        reason: 'budget-exhausted',
+        detail: `loop "${step.id}" aborted by human after budget exhaustion`,
+        recoverable: false,
+      },
+    })
+    return 'failed'
+  }
+
+  const resumeFrom = ctx.loopContinuation?.action === 'continue' ? await buildResumeFrom(step, ctx) : undefined
+  const status = await runLoopBody(step, ctx, resumeFrom)
 
   // `'failed'` already got its own, more specific `step.failed` journaled
   // at the point of failure (body-step hard failure or onExhausted: 'fail')
@@ -67,16 +93,54 @@ export async function runLoopStep(step: LoopStep, ctx: LoopRunContext): Promise<
   return status
 }
 
-async function runLoopBody(step: LoopStep, ctx: LoopRunContext): Promise<'ok' | 'failed' | 'suspended'> {
+/** M4 ticket 06: reconstructs where a previously-suspended-for-exhaustion
+ * loop left off, from the journal alone — the same "resume-correct for
+ * free" approach ticket 03 (M3) used for budget accounting. Finds the
+ * iteration the loop tripped at (its last `loop.iteration` event), then
+ * reads each body step's per-iteration artifact at that iteration back off
+ * disk to seed `priorValues`/`priorHashes` for the next one. */
+async function buildResumeFrom(step: LoopStep, ctx: LoopRunContext): Promise<ResumeFrom> {
+  const events = await readJournal(ctx.runDir)
+  const bodyStepIds = new Set(step.body.map((s) => s.id))
+  const trippedIteration = [...events]
+    .reverse()
+    .find((e) => e.t === 'loop.iteration' && e.stepId === step.id)
+
+  const iteration = trippedIteration && trippedIteration.t === 'loop.iteration' ? trippedIteration.n : 0
+
+  const priorValues = new Map<ArtifactName, unknown>()
+  const priorHashes = new Map<ArtifactName, string>()
+  for (const event of events) {
+    if (event.t !== 'step.completed' || event.iteration !== iteration) continue
+    if (!bodyStepIds.has(event.stepId) || !event.artifact) continue
+    priorValues.set(event.artifact, await readArtifactRaw(ctx.runDir, event.artifact, iteration))
+    if (event.artifactHash) priorHashes.set(event.artifact, event.artifactHash)
+  }
+
+  const addIterations = ctx.loopContinuation?.addIterations ?? 0
+  return {
+    startIteration: iteration + 1,
+    priorValues,
+    priorHashes,
+    maxIterations: step.budget.maxIterations + addIterations,
+  }
+}
+
+async function runLoopBody(
+  step: LoopStep,
+  ctx: LoopRunContext,
+  resumeFrom?: ResumeFrom,
+): Promise<'ok' | 'failed' | 'suspended'> {
   const localProducerOf = buildProducerMap(step.body)
   const bodyOrderIndex = new Map(step.body.map((s, i) => [s.id, i]))
   const bodyStepIds = new Set(step.body.map((s) => s.id))
+  const effectiveMaxIterations = resumeFrom?.maxIterations ?? step.budget.maxIterations
 
-  let priorValues = new Map<ArtifactName, unknown>()
-  let priorHashes = new Map<ArtifactName, string>()
+  let priorValues = resumeFrom?.priorValues ?? new Map<ArtifactName, unknown>()
+  let priorHashes = resumeFrom?.priorHashes ?? new Map<ArtifactName, string>()
   let lastSignal: unknown
 
-  for (let iteration = 1; ; iteration++) {
+  for (let iteration = resumeFrom?.startIteration ?? 1; ; iteration++) {
     const thisValues = new Map<ArtifactName, unknown>()
     const thisHashes = new Map<ArtifactName, string>()
 
@@ -131,7 +195,7 @@ async function runLoopBody(step: LoopStep, ctx: LoopRunContext): Promise<'ok' | 
     if (step.budget.noProgress) {
       tripped = (await noProgressTripped(step, ctx, iteration)) ? 'noProgress' : tripped
     }
-    if (!tripped && iteration >= step.budget.maxIterations) tripped = 'maxIterations'
+    if (!tripped && iteration >= effectiveMaxIterations) tripped = 'maxIterations'
     if (!tripped && step.budget.maxTokens !== undefined) {
       const tokensTotal = await sumBodyTokens(ctx.runDir, bodyStepIds)
       if (tokensTotal >= step.budget.maxTokens) tripped = 'maxTokens'
@@ -175,11 +239,12 @@ async function sumBodyTokens(runDir: string, bodyStepIds: Set<StepId>): Promise<
     .reduce((sum, e) => sum + (e as { tokens: number }).tokens, 0)
 }
 
-/** Ticket 04: `onExhausted` policy. `'suspend'` journals `run.suspended`
- * (journal-only stub, no gate-shaped pending file — there is no answer to
- * ever write back to it) and returns `'suspended'`, which the scheduler
- * propagates to `EX_SUSPEND` (exit 78). `'fail'` journals `step.failed` on
- * the loop step itself. `'continue'` treats exhaustion as acceptable. */
+/** `onExhausted` policy. `'suspend'` writes a real pending request (M4
+ * ticket 02/08 — supersedes the M3 stub that only journaled
+ * `run.suspended` with nothing to answer) and returns `'suspended'`,
+ * which the scheduler propagates to `EX_SUSPEND` (exit 78). `'fail'`
+ * journals `step.failed` on the loop step itself. `'continue'` treats
+ * exhaustion as acceptable. */
 async function handleExhausted(
   step: LoopStep,
   ctx: LoopRunContext,
@@ -210,6 +275,7 @@ async function handleExhausted(
     iteration,
     tripped,
   })
+  await writeLoopExhaustedRequest(ctx.runDir, ctx.runId, step.id, iteration, tripped)
   return 'suspended'
 }
 

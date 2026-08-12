@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { ZodType } from 'zod'
+import { ZodBoolean, ZodDefault, ZodEnum, ZodNumber, ZodObject, ZodOptional, ZodString, ZodType } from 'zod'
 import { extractTemplateRoots } from '../expr/template.js'
 import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps } from './graph.js'
-import type { ArtifactName, Expr, Step, StepId, Workflow } from './types.js'
+import type { ArtifactName, Expr, GateStep, Step, StepId, Workflow } from './types.js'
 
 export class WorkflowValidationError extends Error {}
 
@@ -53,6 +53,8 @@ export async function validateWorkflow(workflow: Workflow, cwd: string = process
   await checkAgentPromptPlaceholders(flatSteps, cwd)
   checkSessionChainDepth(flatSteps)
   checkMapIsolation(workflow.steps)
+  await checkGateSchemaKeys(flatSteps, cwd)
+  await checkGateRenderPlaceholders(flatSteps, cwd)
 }
 
 /** Ticket 07: real worktree isolation is M5's job — requesting it explicitly
@@ -233,6 +235,100 @@ async function checkAgentSchemaKeys(steps: Step[], cwd: string): Promise<void> {
       throw new WorkflowValidationError(
         `step "${step.id}": schema "${step.schema}" not found in .yak/schemas.ts`,
       )
+    }
+  }
+}
+
+/** §13 `GateStep.schema` is a key in `.yak/schemas.ts`, same resolver
+ * convention as `AgentStep.schema` (`checkAgentSchemaKeys`). M4 ticket 05:
+ * a gate with `skipIf` additionally requires every field on that schema to
+ * carry a Zod `.default()` — `schema.safeParse({})` must succeed, since the
+ * skip path parses `{}` through the schema to synthesize the artifact. */
+async function checkGateSchemaKeys(steps: Step[], cwd: string): Promise<void> {
+  for (const step of steps) {
+    if (step.kind !== 'gate') continue
+
+    const modulePath = path.resolve(cwd, '.yak/schemas.ts')
+    let mod: Record<string, unknown>
+    try {
+      mod = await import(pathToFileURL(modulePath).href)
+    } catch (err) {
+      throw new WorkflowValidationError(
+        `step "${step.id}": could not load .yak/schemas.ts to resolve schema "${step.schema}": ` +
+          `${(err as Error).message}`,
+      )
+    }
+    const schema = mod[step.schema]
+    if (!(schema instanceof ZodType)) {
+      throw new WorkflowValidationError(
+        `step "${step.id}": schema "${step.schema}" not found in .yak/schemas.ts`,
+      )
+    }
+
+    if (step.skipIf !== undefined) {
+      const defaulted = schema.safeParse({})
+      if (!defaulted.success) {
+        throw new WorkflowValidationError(
+          `step "${step.id}": has skipIf but schema "${step.schema}" doesn't default every field ` +
+            `(parsing {} failed: ${defaulted.error.issues.map((i) => i.path.join('.')).join(', ')}) — ` +
+            `every field needs a Zod .default() so a skip can synthesize the answer artifact`,
+        )
+      }
+    }
+
+    checkFlatAnswerSchema(step, schema)
+  }
+}
+
+/** M4 ticket 04: `--interactive` only knows how to render a flat answer
+ * schema — top-level object, each property a scalar (string/number/
+ * boolean) or enum, optionally wrapped in `.optional()`/`.default()`.
+ * Rejected here, at load time, rather than discovered mid-prompt at
+ * runtime — same "fail where the workflow author can see it" reasoning as
+ * every other schema check in this file. */
+function checkFlatAnswerSchema(step: GateStep, schema: ZodType): void {
+  if (!(schema instanceof ZodObject)) {
+    throw new WorkflowValidationError(
+      `step "${step.id}": schema "${step.schema}" must be a top-level object for --interactive to render`,
+    )
+  }
+
+  for (const [field, fieldSchemaRaw] of Object.entries(schema.shape as Record<string, ZodType>)) {
+    let fieldSchema: ZodType = fieldSchemaRaw
+    while (fieldSchema instanceof ZodOptional || fieldSchema instanceof ZodDefault) {
+      fieldSchema = fieldSchema instanceof ZodOptional ? fieldSchema.unwrap() : fieldSchema._def.innerType
+    }
+    const isScalar =
+      fieldSchema instanceof ZodString || fieldSchema instanceof ZodNumber || fieldSchema instanceof ZodBoolean
+    if (!isScalar && !(fieldSchema instanceof ZodEnum)) {
+      throw new WorkflowValidationError(
+        `step "${step.id}": schema "${step.schema}" field "${field}" is not a flat scalar/enum type — ` +
+          `--interactive can only render string/number/boolean/enum properties, optionally wrapped in ` +
+          `.optional()/.default()`,
+      )
+    }
+  }
+}
+
+/** A gate's `render` template placeholders must resolve against its `needs`,
+ * same rule as an agent step's prompt (`checkAgentPromptPlaceholders`). */
+async function checkGateRenderPlaceholders(steps: Step[], cwd: string): Promise<void> {
+  for (const step of steps) {
+    if (step.kind !== 'gate') continue
+
+    const text =
+      'file' in step.render
+        ? await readFile(path.resolve(cwd, step.render.file), 'utf8')
+        : step.render.inline
+
+    const allowed = new Set<ArtifactName>(step.needs ?? [])
+
+    for (const root of extractTemplateRoots(text)) {
+      if (!allowed.has(root)) {
+        throw new WorkflowValidationError(
+          `step "${step.id}": render references "{{${root}}}" but "${root}" is not in needs`,
+        )
+      }
     }
   }
 }

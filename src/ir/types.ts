@@ -99,7 +99,7 @@ export type JournalEvent =
   | { t: 'loop.iteration';   stepId: StepId; n: number; signal?: unknown }
   | { t: 'map.item.retried'; mapStepId: StepId; itemIndex: number; attempt: number; error: string }
   | { t: 'gate.opened';      stepId: StepId; requestPath: string }
-  | { t: 'gate.answered';    stepId: StepId }
+  | { t: 'gate.answered';    stepId: StepId; skipped?: boolean }
   | { t: 'run.suspended';    reason: 'gate' | 'budget' | 'exhausted'
                              loopStepId?: StepId; iteration?: number
                              tripped?: 'maxIterations' | 'maxTokens' | 'noProgress' }

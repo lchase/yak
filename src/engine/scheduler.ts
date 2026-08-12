@@ -8,6 +8,7 @@ import { agentInputNames, buildProducerMap, dependenciesOf, inputNamesOf } from 
 import type { AdapterId, ArtifactName, Step, StepId, Workflow } from '../ir/types.js'
 import { AgentStepFailedError, runAgentStep } from '../steps/agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from '../steps/command.js'
+import { runGateStep } from '../steps/gate.js'
 import { runLoopStep } from '../steps/loop.js'
 import { runMapStep } from '../steps/map.js'
 import { runTransformStep } from '../steps/transform.js'
@@ -31,6 +32,11 @@ export interface ScheduleContext {
   cacheDir: string
   adapter: AdapterId
   concurrency?: number
+  /** M4 ticket 02/06: a validated `{ action, addIterations? }` answer for a
+   * loop step resuming from exhaustion, keyed by the loop step's id —
+   * populated by `resumeRun` from a `pending/<step>.answer.json` it just
+   * validated, consumed once by `runLoopStep`. */
+  loopContinuations?: Map<StepId, { action: 'continue' | 'abort'; addIterations?: number }>
 }
 
 /** Ticket 09: `mock` is fixture-driven (keyed by workflow name + step id
@@ -89,9 +95,15 @@ function trustResumedSteps(
       if (!info) continue
       if (!dependenciesOf(step, producerOf).every((dep) => completed.has(dep))) continue
 
-      const semanticKey = computeSemanticKey(step, collectInputHashes(step, artifactHashes))
-      const definitionKey = computeDefinitionKey(step)
-      if (semanticKey !== info.semanticKey || definitionKey !== info.definitionKey) continue
+      // Ticket 07: a gate step never computes semantic/definitionKey, so
+      // there's nothing to match — a completed gate found in the journal
+      // (`resume.ts` only appends `step.completed` for one after its answer
+      // validated) is trusted unconditionally, never re-suspended.
+      if (step.kind !== 'gate') {
+        const semanticKey = computeSemanticKey(step, collectInputHashes(step, artifactHashes))
+        const definitionKey = computeDefinitionKey(step)
+        if (semanticKey !== info.semanticKey || definitionKey !== info.definitionKey) continue
+      }
 
       completed.add(step.id)
       remaining.delete(step.id)
@@ -183,7 +195,16 @@ async function runStep(
       definitionKey,
       outerArtifactHashes: artifactHashes,
       buildAdapter: (stepId, iteration) => buildAdapter(ctx.adapter, ctx, workflowName, stepId, iteration),
+      loopContinuation: ctx.loopContinuations?.get(step.id),
     })
+  }
+
+  if (step.kind === 'gate') {
+    const inputs: Record<string, unknown> = {}
+    for (const need of step.needs ?? []) {
+      inputs[need] = await readArtifactRaw(ctx.runDir, need)
+    }
+    return runGateStep(step, inputs, { runId: ctx.runId, runDir: ctx.runDir, cwd: ctx.cwd })
   }
 
   if (step.kind === 'map') {
@@ -202,10 +223,8 @@ async function runStep(
     })
   }
 
-  if (step.kind !== 'command' && step.kind !== 'transform' && step.kind !== 'agent') {
-    throw new Error(`step "${step.id}": kind "${step.kind}" not yet supported in M3`)
-  }
-
+  // Every other kind (loop/gate/map) already returned above — TS narrows
+  // `step` to command | transform | agent here.
   const semanticKey = computeSemanticKey(step, collectInputHashes(step, artifactHashes))
   const definitionKey = computeDefinitionKey(step)
 

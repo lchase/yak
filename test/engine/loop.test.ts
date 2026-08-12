@@ -112,20 +112,94 @@ describe('loop combinator: no-progress exhaustion', () => {
   })
 })
 
-describe('ticket 04: resuming a loop-exhausted run', () => {
-  it('errors clearly instead of re-entering the loop', async () => {
+describe('M4 tickets 02/06/08: resuming a loop-exhausted run', () => {
+  it('leaves the run suspended, untouched, when no answer file exists yet', async () => {
     const runsDir = path.join(dir, '.runs')
     const result = await executeWorkflowFile(LOOP_BUDGET_EXHAUSTED_WORKFLOW, { runsDir, cwd })
     expect(result.status).toBe('suspended')
 
     await expect(resumeRun(result.runId, { runsDir, cwd })).rejects.toThrow(
-      /suspended.*fix-until-green.*maxIterations.*M4/s,
+      /fix-until-green.*no answer file/s,
     )
 
-    // confirm it's a no-op — no further iterations were run
+    // confirm it's a no-op — no further iterations were run, no journal change
     const events = await readJournal(result.runDir)
     const testStarted = events.filter((e) => e.t === 'step.started' && e.stepId === 'test')
     expect(testStarted).toHaveLength(3)
+    expect(events.some((e) => e.t === 'gate.answered')).toBe(false)
+  })
+
+  it('fails the loop step with budget-exhausted on an "abort" answer', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    const runsDir = path.join(dir, '.runs')
+    const result = await executeWorkflowFile(LOOP_BUDGET_EXHAUSTED_WORKFLOW, { runsDir, cwd })
+    expect(result.status).toBe('suspended')
+
+    await mkdir(path.join(result.runDir, 'pending'), { recursive: true })
+    await writeFile(
+      path.join(result.runDir, 'pending', 'fix-until-green.answer.json'),
+      JSON.stringify({ action: 'abort' }),
+      'utf8',
+    )
+
+    const resumed = await resumeRun(result.runId, { runsDir, cwd })
+    expect(resumed.status).toBe('failed')
+
+    const events = await readJournal(result.runDir)
+    const failure = events.find((e) => e.t === 'step.failed' && e.stepId === 'fix-until-green')
+    expect(failure).toMatchObject({ failure: { reason: 'budget-exhausted' } })
+  })
+
+  it('resumes from the tripped iteration on a "continue" answer with addIterations', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    const runsDir = path.join(dir, '.runs')
+
+    // A variant that succeeds only on the 4th `test` run — out of reach of
+    // the original maxIterations: 3, reachable only via addIterations.
+    // The counter file's path is embedded directly (no shell env
+    // indirection) so the command is portable across /bin/sh variants.
+    const counterFile = path.join(cwd, 'counter')
+    const workflowPath = path.join(cwd, 'loop-continue.yaml')
+    await writeFile(
+      workflowPath,
+      `name: loop-continue
+version: "1"
+steps:
+  - id: fix-until-green
+    loop:
+      until: "testresult.exitCode == 0"
+      budget:
+        maxIterations: 3
+      body:
+        - id: implement
+          command: { run: "true" }
+          produces: code
+        - id: test
+          needs: [code]
+          command: { run: "c=$(cat ${counterFile} 2>/dev/null || echo 0); c=$((c+1)); echo $c > ${counterFile}; test $c -ge 4 && exit 0 || exit 1", capture: [exitCode], failOn: never }
+          produces: testresult
+`,
+      'utf8',
+    )
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir, cwd })
+    expect(result.status).toBe('suspended')
+
+    await mkdir(path.join(result.runDir, 'pending'), { recursive: true })
+    await writeFile(
+      path.join(result.runDir, 'pending', 'fix-until-green.answer.json'),
+      JSON.stringify({ action: 'continue', addIterations: 2 }),
+      'utf8',
+    )
+
+    const resumed = await resumeRun(result.runId, { runsDir, cwd })
+    expect(resumed.status).toBe('ok')
+
+    const events = await readJournal(resumed.runDir)
+    // 3 iterations before suspend + 1 more after resume = 4 `test` starts
+    const testStarted = events.filter((e) => e.t === 'step.started' && e.stepId === 'test')
+    expect(testStarted).toHaveLength(4)
+    expect(testStarted.map((e) => (e as { iteration?: number }).iteration)).toEqual([1, 2, 3, 4])
   })
 })
 

@@ -1,0 +1,9 @@
+name: gate-skip
+version: "1"
+steps:
+  - id: approve
+    gate:
+      schema: AutoApprovalSchema
+      render: { inline: "Approve this change?" }
+      skipIf: "true"
+    produces: decision

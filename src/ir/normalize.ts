@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { AgentStep, Budget, CommandStep, Expr, LoopStep, MapStep, Step, TransformStep, Workflow } from './types.js'
+import type { AgentStep, Budget, CommandStep, Expr, GateStep, LoopStep, MapStep, Step, TransformStep, Workflow } from './types.js'
 
 const rawCommandSchema = z.object({
   run: z.string(),
@@ -29,6 +29,12 @@ const rawAgentSchema = z.object({
 
 const rawExprSchema: z.ZodType<Expr> = z.union([z.string(), z.object({ fn: z.string() })])
 
+const rawGateSchema = z.object({
+  schema: z.string(),
+  render: z.union([z.object({ file: z.string() }), z.object({ inline: z.string() })]),
+  skipIf: rawExprSchema.optional(),
+})
+
 const rawBudgetSchema: z.ZodType<Budget> = z.object({
   maxIterations: z.number(),
   maxTokens: z.number().optional(),
@@ -44,6 +50,7 @@ interface RawStep {
   command?: z.infer<typeof rawCommandSchema>
   transform?: z.infer<typeof rawTransformSchema>
   agent?: z.infer<typeof rawAgentSchema>
+  gate?: z.infer<typeof rawGateSchema>
   loop?: {
     until: Expr
     budget: Budget
@@ -71,6 +78,7 @@ const rawStepSchema: z.ZodType<RawStep> = z.lazy(() =>
     command: rawCommandSchema.optional(),
     transform: rawTransformSchema.optional(),
     agent: rawAgentSchema.optional(),
+    gate: rawGateSchema.optional(),
     loop: z
       .object({
         until: rawExprSchema,
@@ -144,6 +152,20 @@ function normalizeStep(raw: RawStep): Step {
     return step
   }
 
+  if (raw.gate) {
+    const step: GateStep = {
+      id: raw.id,
+      needs: raw.needs ?? [],
+      cache: raw.cache ?? 'strict',
+      kind: 'gate',
+      schema: raw.gate.schema,
+      render: raw.gate.render,
+      ...(raw.gate.skipIf !== undefined ? { skipIf: raw.gate.skipIf } : {}),
+      ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
+    }
+    return step
+  }
+
   if (raw.loop) {
     const step: LoopStep = {
       id: raw.id,
@@ -179,7 +201,9 @@ function normalizeStep(raw: RawStep): Step {
     return step
   }
 
-  throw new Error(`step "${raw.id}": only "command", "transform", "agent", "loop", and "map" steps are supported`)
+  throw new Error(
+    `step "${raw.id}": only "command", "transform", "agent", "gate", "loop", and "map" steps are supported`,
+  )
 }
 
 export function normalizeWorkflow(raw: unknown): Workflow {

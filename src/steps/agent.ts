@@ -21,8 +21,11 @@ export async function resolveAgentSchema(name: string, cwd: string): Promise<Zod
   return schema
 }
 
-export function toJsonSchema(schema: ZodType, name: string): object {
-  return zodToJsonSchema(schema, name)
+/** Omitting `name` inlines the schema directly rather than wrapping it in
+ * a `$ref`/`definitions` indirection — needed wherever a consumer expects
+ * a flat object schema (e.g. `--interactive`'s renderer, ticket 04). */
+export function toJsonSchema(schema: ZodType, name?: string): object {
+  return name === undefined ? zodToJsonSchema(schema) : zodToJsonSchema(schema, name)
 }
 
 export async function buildPrompt(step: AgentStep, inputs: Record<string, unknown>, cwd: string): Promise<string> {

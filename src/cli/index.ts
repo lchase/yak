@@ -2,6 +2,7 @@
 import { Command } from 'commander'
 import type { AdapterId } from '../ir/types.js'
 import { artifactsCommand } from './commands/artifacts.js'
+import { pendingCommand } from './commands/pending.js'
 import { resumeCommand } from './commands/resume.js'
 import { runCommand } from './commands/run.js'
 import { statusCommand } from './commands/status.js'
@@ -25,8 +26,12 @@ program
   .description('Run a workflow YAML file')
   .argument('<workflow>', 'path to the workflow YAML file')
   .option('--adapter <adapter>', 'agent adapter to use', 'claude-code')
-  .action(async (workflow: string, options: { adapter: string }) => {
-    process.exitCode = await runCommand(workflow, requireAdapterId(options.adapter))
+  .option('--interactive', 'prompt inline for gate answers instead of exiting to resume later', false)
+  .action(async (workflow: string, options: { adapter: string; interactive: boolean }) => {
+    process.exitCode = await runCommand(workflow, {
+      adapter: requireAdapterId(options.adapter),
+      interactive: options.interactive,
+    })
   })
 
 program
@@ -44,6 +49,13 @@ program
   .argument('[run-id]', 'id of the run to report on (default: most recent)')
   .action(async (runId: string | undefined) => {
     process.exitCode = await statusCommand(runId)
+  })
+
+program
+  .command('pending')
+  .description('List every run across the repo awaiting a human answer')
+  .action(async () => {
+    process.exitCode = await pendingCommand()
   })
 
 program

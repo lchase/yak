@@ -1,13 +1,17 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { flattenSteps } from '../ir/graph.js'
 import { loadWorkflowYaml } from '../ir/load.js'
 import { normalizeWorkflow } from '../ir/normalize.js'
-import type { AdapterId, Workflow } from '../ir/types.js'
+import type { AdapterId, StepId, Workflow } from '../ir/types.js'
 import { validateWorkflow } from '../ir/validate.js'
+import { completeGate } from '../steps/gate.js'
+import { resolveAgentSchema } from '../steps/agent.js'
 import { sha256 } from '../util/hash.js'
 import { appendJournalEvent, completedStepsFromJournal, readJournal } from './journal.js'
 import { runEligibleSteps } from './scheduler.js'
+import { openRequestStepIds, resolveAnswer } from './suspend.js'
 
 const DEFAULT_ADAPTER: AdapterId = 'claude-code'
 
@@ -91,6 +95,69 @@ export async function readRunWorkflow(runDir: string): Promise<Workflow> {
 }
 
 /**
+ * M4 ticket 06: resolves every currently-open pending request (a gate or a
+ * loop-exhaustion suspend, ticket 03's journal-based "open" test) against
+ * whatever answer file a human has written. A missing or schema-invalid
+ * answer throws — the run is left exactly as it was, no journal writes,
+ * per ticket 06's "leave suspended, fix and retry" resolution; `yak
+ * resume` surfaces the message and exits non-zero. Every request answered
+ * validly gets consumed: a gate writes its artifact (`completeGate`), a
+ * loop-exhaustion answer is folded into the returned `loopContinuations`
+ * map for `runLoopStep` to act on.
+ */
+async function resolveOpenRequests(
+  runId: string,
+  runDir: string,
+  workflow: Workflow,
+  cwd: string,
+  events: Awaited<ReturnType<typeof readJournal>>,
+): Promise<Map<StepId, { action: 'continue' | 'abort'; addIterations?: number }>> {
+  const loopContinuations = new Map<StepId, { action: 'continue' | 'abort'; addIterations?: number }>()
+  const openIds = openRequestStepIds(events)
+  if (openIds.length === 0) return loopContinuations
+
+  const flatSteps = flattenSteps(workflow.steps)
+  const gateAnswerSchema = async (request: { stepId: StepId }) => {
+    const step = flatSteps.find((s) => s.id === request.stepId)
+    if (!step || step.kind !== 'gate') {
+      throw new Error(`pending request for step "${request.stepId}" but no gate step with that id exists`)
+    }
+    return resolveAgentSchema(step.schema, cwd)
+  }
+
+  const resolutions = await Promise.all(openIds.map((stepId) => resolveAnswer(runDir, stepId, gateAnswerSchema)))
+
+  const missing = resolutions.filter((r) => r.status === 'missing')
+  const invalid = resolutions.filter((r) => r.status === 'invalid')
+  if (missing.length > 0 || invalid.length > 0) {
+    const lines = [
+      ...missing.map((r) => `  ${r.stepId}: no answer file written yet`),
+      ...invalid.map((r) => `  ${r.stepId}: invalid answer\n${r.errors.replace(/^/gm, '    ')}`),
+    ]
+    throw new Error(`run ${runId} still has unresolved pending requests:\n${lines.join('\n')}`)
+  }
+
+  for (const resolution of resolutions) {
+    if (resolution.status !== 'ok') continue
+    const { request, answer } = resolution
+
+    if (request.kind === 'loop-exhausted') {
+      loopContinuations.set(request.stepId, answer as { action: 'continue' | 'abort'; addIterations?: number })
+      await appendJournalEvent(runDir, runId, { t: 'gate.answered', stepId: request.stepId })
+      continue
+    }
+
+    const step = flatSteps.find((s) => s.id === request.stepId)
+    if (!step || step.kind !== 'gate') {
+      throw new Error(`pending request for step "${request.stepId}" but no gate step with that id exists`)
+    }
+    await completeGate(step, { runId, runDir, cwd }, answer, { skipped: false })
+  }
+
+  return loopContinuations
+}
+
+/**
  * Spec §4.4 `yak resume <run-id>`: replay the journal of an interrupted run,
  * mark completed steps, and continue — reusing cache-valid artifacts and
  * re-running only what wasn't (and everything downstream of a mismatch).
@@ -101,22 +168,10 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
 
   const workflow = await readRunWorkflow(runDir)
 
-  const events = await readJournal(runDir)
+  let events = await readJournal(runDir)
+  const loopContinuations = await resolveOpenRequests(runId, runDir, workflow, cwd, events)
 
-  // Ticket 04: a loop-exhausted run is unresumable in M3 — there is no
-  // gate/answer protocol yet (M4's job) to give `yak resume` anything to
-  // act on, so it fails loud rather than silently re-entering the loop
-  // with a fresh budget (which would mask a genuinely stuck loop) or
-  // no-op re-reporting the suspended state (redundant with `yak status`).
-  const lastSuspended = [...events].reverse().find((e) => e.t === 'run.suspended')
-  if (lastSuspended && lastSuspended.t === 'run.suspended' && lastSuspended.reason !== 'gate') {
-    throw new Error(
-      `run ${runId} is suspended (loop "${lastSuspended.loopStepId}" exhausted: ` +
-        `${lastSuspended.tripped}) — resuming a loop-exhausted run isn't implemented ` +
-        `until M4's gate/answer protocol lands`,
-    )
-  }
-
+  events = await readJournal(runDir)
   const resumeState = completedStepsFromJournal(events)
 
   // Ticket 09: the adapter choice is a per-run constant, persisted on
@@ -133,7 +188,7 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
 
   const status = await runEligibleSteps(
     workflow,
-    { runId, runDir, cwd, cacheDir, adapter: persistedAdapter },
+    { runId, runDir, cwd, cacheDir, adapter: persistedAdapter, loopContinuations },
     resumeState,
   )
 

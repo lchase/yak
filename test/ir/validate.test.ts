@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { validateWorkflow, WorkflowValidationError } from '../../src/ir/validate.js'
-import type { AgentStep, CommandStep, LoopStep, MapStep, Step, Workflow } from '../../src/ir/types.js'
+import type { AgentStep, CommandStep, GateStep, LoopStep, MapStep, Step, Workflow } from '../../src/ir/types.js'
 
 function workflow(steps: Step[]): Workflow {
   return { name: 'w', version: '1', steps }
@@ -19,6 +19,10 @@ function agent(overrides: Partial<AgentStep> & Pick<AgentStep, 'id'>): AgentStep
 
 function map(overrides: Partial<MapStep> & Pick<MapStep, 'id' | 'over' | 'step'>): MapStep {
   return { kind: 'map', isolation: 'none', ...overrides }
+}
+
+function gate(overrides: Partial<GateStep> & Pick<GateStep, 'id' | 'schema'>): GateStep {
+  return { kind: 'gate', render: { inline: 'approve?' }, ...overrides }
 }
 
 describe('validateWorkflow', () => {
@@ -192,6 +196,67 @@ describe('validateWorkflow', () => {
     it('rejects a schema key missing from .yak/schemas.ts', async () => {
       const wf = workflow([agent({ id: 'plan', schema: 'Nope' })])
       await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/schema "Nope" not found/)
+    })
+  })
+
+  describe('M4: gate step schema keys, skipIf defaults, flat-schema, render placeholders', () => {
+    let cwd: string
+
+    async function withSchema(source: string): Promise<void> {
+      await writeFile(path.join(cwd, '.yak', 'schemas.ts'), source, 'utf8')
+    }
+
+    beforeEach(async () => {
+      cwd = await mkdtemp(path.join(tmpdir(), 'yak-validate-gate-'))
+      await mkdir(path.join(cwd, '.yak'), { recursive: true })
+      await withSchema(
+        `import { z } from 'zod'\n` +
+          `export const ApprovalSchema = z.object({ decision: z.enum(['approve','reject']) })\n` +
+          `export const AutoApprovalSchema = z.object({ decision: z.enum(['approve','reject']).default('approve') })\n` +
+          `export const NestedSchema = z.object({ inner: z.object({ x: z.string() }) })\n`,
+      )
+    })
+
+    afterEach(async () => {
+      await rm(cwd, { recursive: true, force: true })
+    })
+
+    it('accepts a schema key that resolves to a ZodType', async () => {
+      const wf = workflow([gate({ id: 'approve', schema: 'ApprovalSchema' })])
+      await expect(validateWorkflow(wf, cwd)).resolves.toBeUndefined()
+    })
+
+    it('rejects a schema key missing from .yak/schemas.ts', async () => {
+      const wf = workflow([gate({ id: 'approve', schema: 'Nope' })])
+      await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/schema "Nope" not found/)
+    })
+
+    it('ticket 05: rejects skipIf when the schema does not default every field', async () => {
+      const wf = workflow([gate({ id: 'approve', schema: 'ApprovalSchema', skipIf: 'true' })])
+      await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/doesn't default every field/)
+    })
+
+    it('ticket 05: accepts skipIf when every field defaults', async () => {
+      const wf = workflow([gate({ id: 'approve', schema: 'AutoApprovalSchema', skipIf: 'true' })])
+      await expect(validateWorkflow(wf, cwd)).resolves.toBeUndefined()
+    })
+
+    it('ticket 04: rejects a nested (non-flat) answer schema at load time', async () => {
+      const wf = workflow([gate({ id: 'approve', schema: 'NestedSchema' })])
+      await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/not a flat scalar\/enum type/)
+    })
+
+    it('accepts a render placeholder declared in needs', async () => {
+      const wf = workflow([
+        command({ id: 'src', produces: 'plan' }),
+        gate({ id: 'approve', schema: 'ApprovalSchema', needs: ['plan'], render: { inline: '{{plan}}' } }),
+      ])
+      await expect(validateWorkflow(wf, cwd)).resolves.toBeUndefined()
+    })
+
+    it('rejects a render placeholder not in needs', async () => {
+      const wf = workflow([gate({ id: 'approve', schema: 'ApprovalSchema', render: { inline: '{{plan}}' } })])
+      await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/"plan" is not in needs/)
     })
   })
 

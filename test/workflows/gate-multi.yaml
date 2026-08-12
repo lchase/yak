@@ -1,0 +1,14 @@
+name: gate-multi
+version: "1"
+steps:
+  - id: approve-a
+    gate:
+      schema: ApprovalSchema
+      render: { inline: "Approve A?" }
+    produces: decision-a
+
+  - id: approve-b
+    gate:
+      schema: ApprovalSchema
+      render: { inline: "Approve B?" }
+    produces: decision-b
