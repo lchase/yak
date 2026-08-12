@@ -402,7 +402,7 @@ interface AgentAdapter {
 
 MVP implementations:
 
-- **`claude-code`** — wraps the Claude Agent SDK `query()`. Maps `tools` to `allowedTools`, `schema` to structured output, streams messages into `sessions/<step>.jsonl`.
+- **`claude-code`** — wraps the Claude Agent SDK `query()`. Maps `tools` to the SDK's `tools` option (the availability allowlist, not the approval-only `allowedTools`), `schema` to structured output, streams messages into `sessions/<step>.jsonl`. `permissionMode` is a fixed `bypassPermissions` engine-wide (no per-step IR field) — the only mode that needs no `canUseTool` callback, since agent steps have no channel to ask a human (§3.6). `tools` genuinely restricts what the model can call independent of `permissionMode`; only `allowedTools`, which yak doesn't use for this purpose, is nullified by `bypassPermissions`.
 - **`mock`** — reads canned responses from a fixtures directory keyed by step id. Makes the whole test suite deterministic and free. **Build this second, before the real adapter, not last.**
 
 Later: `codex-cli`, `openai-agents`.
