@@ -55,7 +55,7 @@ export async function callAgentOnce(
 ): Promise<{ output: unknown; sessionId: string }> {
   const prompt = (await buildPrompt(step, inputs, ctx.cwd)) + (promptSuffix ?? '')
   const schema = step.schema ? await resolveAgentSchema(step.schema, ctx.cwd) : undefined
-  const jsonSchema = schema ? toJsonSchema(schema, step.schema!) : undefined
+  const jsonSchema = schema ? toJsonSchema(schema) : undefined
 
   const response = await ctx.adapter.run({
     prompt,
@@ -134,7 +134,7 @@ export async function runAgentStep(
     if (parsed.success) return parsed.data
 
     lastErrorSummary = formatZodError(parsed.error)
-    suffix = repairSuffix(toJsonSchema(schema, step.schema!), lastErrorSummary)
+    suffix = repairSuffix(toJsonSchema(schema), lastErrorSummary)
   }
 
   await writeRejectedOutput(ctx.runDir, step.id, maxAttempts, JSON.stringify(lastOutput, null, 2))

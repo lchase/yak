@@ -135,9 +135,7 @@ describe('callAgentOnce', () => {
 
     expect(result).toEqual({ output: { summary: 'done' }, sessionId: 'sess-1' })
     expect(adapter.lastRequest?.prompt).toBe('Fix bug')
-    expect(adapter.lastRequest?.schema).toMatchObject({
-      definitions: { PlanSchema: { type: 'object' } },
-    })
+    expect(adapter.lastRequest?.schema).toMatchObject({ type: 'object', required: ['summary'] })
 
     const events = await readJournal(runDir)
     expect(events).toContainEqual(
