@@ -6,28 +6,45 @@ Reads a YAML DAG, runs steps (shell commands, pure transforms, coding-agent
 invocations, human gates), and journals everything to disk so runs resume
 exactly where they stopped.
 
-Status: M0 done. M1 done — `mock` adapter, `agent` step, Zod schema
-validation, schema repair loop; the `agent → agent → command → transform`
-reference-workflow subset runs deterministically against fixtures. M2's
-`claude-code` adapter is implemented (wraps the Claude Agent SDK's
-`query()` — tools/model/permissionMode/resume mapping, `sessions/<step>
-.jsonl` streaming, structured output, the failure-mode → `StepFailure`
-table); the one-real-defect acceptance run itself is still open, tracked
-at `.scratch/yak-m2/issues/08-pick-target-defect.md`. See `spec.md` §8 and
-`.scratch/yak-m2/`.
+Status: M0–M5 all done (spec.md §8). The `agent → agent → command →
+transform` reference shape runs deterministically against fixtures
+(`mock` adapter) and for real against an actual bug
+(`claude-code` adapter, `fixtures/todo-app/` — see the tutorial at
+`docs-site/docs/tutorial.md`, live at
+`https://lchase.github.io/yak/docs/tutorial`). `loop`, `map`, `gate`,
+and worktree isolation are all implemented and executable, not just IR
+types. See `spec.md` §8.
 
-## Current capabilities (M0 + M1 + M2 adapter)
+## Current capabilities (M0–M5)
 
 M0 is zero-AI by design — a boring shell pipeline has to cache, resume, and
 journal correctly before nondeterministic steps go anywhere near it.
 
 - **Step kinds:** `command` (shell exec, capture stdout/stderr/exitCode),
-  `transform` (named pure function from `.yak/transforms.ts`), and `agent`
+  `transform` (named pure function from `.yak/transforms.ts`), `agent`
   (prompt from `{ file }`/`{ inline }` with `{{placeholder}}` interpolation,
   `context: 'fresh' | { inherit } | { session }`, Zod schema validation via
-  `.yak/schemas.ts`, schema repair loop with retries against the `mock`
-  adapter). `gate`, `map`, and `loop` are in the IR types but not yet
-  executable — the scheduler rejects them.
+  `.yak/schemas.ts`, schema repair loop with retries), `loop` (bounded by
+  `maxIterations`, plus a `noProgress` signal/rounds exhaustion check),
+  `map` (concurrency cap, per-item failure policy, optional
+  `isolation: 'worktree'` — each item forks its own worktree off the
+  run's `HEAD`, engine auto-commits before fan-out so items see prior
+  steps' output), and `gate` (human decision point, `schema`-validated
+  answer, optional `skipIf`).
+- **Suspend/resume:** a `gate` or an exhausted budget suspends the run
+  (`run.suspended`, reason `gate` | `budget`, `tripped: maxIterations |
+  maxTokens | noProgress`) rather than failing it. `yak pending` lists
+  every run across the repo awaiting a human answer; `yak resume
+  <run-id>` replays and continues; `--interactive` prompts through open
+  gates inline instead of exiting to resume later.
+- **Worktree isolation:** `yak run --isolation worktree` runs the whole
+  workflow inside a fresh git worktree (`.yak/worktrees/<run-id>/`);
+  `map` steps can additionally isolate each item into its own sibling
+  worktree.
+- **Introspection:** `yak graph <workflow>` emits a workflow's DAG as
+  Mermaid; `yak watch [<run-id>]` live-tails a run's step statuses in a
+  terminal UI; `yak artifacts [<run-id>]` lists a `map` step's per-item
+  artifact files.
 - **Scheduling:** topological sort, concurrent execution of independent
   steps up to a concurrency cap, artifact-driven eligibility (`needs`/
   `produces`).
@@ -57,5 +74,7 @@ journal correctly before nondeterministic steps go anywhere near it.
   `--adapter` override. `claude-code.ts`'s own tests stub `query()` at the
   module boundary — CI never calls a real model, per CLAUDE.md.
 
-Not yet implemented: gate/map/loop step execution, budget enforcement,
-worktree isolation, the CLI beyond `run`/`resume`/`status`.
+Not yet implemented: eval-corpus export (`yak export --evals`,
+descoped from M4, spec.md §9 decision 10), an API/CLI/YAML reference
+beyond spec.md, and npm publish (`docs-site/`'s quickstart still targets
+a git-clone install for that reason).
