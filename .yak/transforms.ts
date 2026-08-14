@@ -61,3 +61,27 @@ export function parseTestResult(inputs: Record<string, unknown>): unknown {
     numTotalTests: report.numTotalTests ?? 0,
   }
 }
+
+/** yak cookbook: fan-out-over-issues map. Static, deterministic batch —
+ * the point of this pattern is the fan-out mechanics (concurrency,
+ * per-item worktree isolation, auto-commit-before-fork), not sourcing
+ * the batch itself. */
+export function batchIssues(): unknown {
+  return [
+    {
+      id: 'capitalize',
+      file: 'fixtures/batch-issues/src/capitalize.ts',
+      test: 'fixtures/batch-issues/test/capitalize.test.ts',
+    },
+    {
+      id: 'clamp',
+      file: 'fixtures/batch-issues/src/clamp.ts',
+      test: 'fixtures/batch-issues/test/clamp.test.ts',
+    },
+    {
+      id: 'isPalindrome',
+      file: 'fixtures/batch-issues/src/isPalindrome.ts',
+      test: 'fixtures/batch-issues/test/isPalindrome.test.ts',
+    },
+  ]
+}
