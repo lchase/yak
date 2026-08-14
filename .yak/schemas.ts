@@ -21,3 +21,14 @@ export const ApprovalSchema = z.object({
 export const AutoApprovalSchema = z.object({
   decision: z.enum(['approve', 'reject']).default('approve'),
 })
+
+// yak cookbook pattern: review-and-revise loop
+// (fixtures/loop-demo/workflow.yaml).
+export const ImplementSchema = z.object({
+  summary: z.string(),
+})
+
+export const ReviewSchema = z.object({
+  approved: z.boolean(),
+  feedback: z.string(),
+})
