@@ -68,7 +68,7 @@ export async function executeWorkflowFile(
 
   const raw = await loadWorkflowYaml(workflowPath)
   const workflow = normalizeWorkflow(raw)
-  await validateWorkflow(workflow, cwd)
+  await validateWorkflow(workflow, cwd, isolation)
 
   const runId = generateRunId()
   const runDir = path.join(runsDir, runId)

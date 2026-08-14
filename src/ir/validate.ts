@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { ZodBoolean, ZodDefault, ZodEnum, ZodNumber, ZodObject, ZodOptional, ZodString, ZodType } from 'zod'
 import { extractTemplateRoots } from '../expr/template.js'
 import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps } from './graph.js'
-import type { ArtifactName, Expr, GateStep, Step, StepId, Workflow } from './types.js'
+import type { ArtifactName, Expr, GateStep, RunIsolation, Step, StepId, Workflow } from './types.js'
 
 export class WorkflowValidationError extends Error {}
 
@@ -40,7 +40,11 @@ const KNOWN_AGENT_TOOLS = new Set([
   'Skill',
 ])
 
-export async function validateWorkflow(workflow: Workflow, cwd: string = process.cwd()): Promise<void> {
+export async function validateWorkflow(
+  workflow: Workflow,
+  cwd: string = process.cwd(),
+  runIsolation: RunIsolation = 'none',
+): Promise<void> {
   const flatSteps = flattenSteps(workflow.steps)
   checkKnownKinds(flatSteps)
   checkDuplicateIds(flatSteps)
@@ -52,45 +56,51 @@ export async function validateWorkflow(workflow: Workflow, cwd: string = process
   await checkAgentSchemaKeys(flatSteps, cwd)
   await checkAgentPromptPlaceholders(flatSteps, cwd)
   checkSessionChainDepth(flatSteps)
-  checkMapIsolation(workflow.steps)
+  checkMapIsolation(workflow.steps, runIsolation)
   await checkGateSchemaKeys(flatSteps, cwd)
   await checkGateRenderPlaceholders(flatSteps, cwd)
 }
 
-/** Ticket 07: real worktree isolation is M5's job — requesting it explicitly
- * is a load-time error in M3, not a silent no-op. `isolation: 'none'` (the
- * M3 default) means concurrent items literally share one process cwd, so
- * `concurrency > 1` with a write-capable item step (`Edit`, `Write`, or
- * `Bash` — `Bash` counts as write-capable since the engine can't tell
- * read-only shell usage from a mutating one) is a structural race the
- * loader can catch, not a caller footgun to document and hope is avoided. */
+/** Ticket 07 (M3) / t03 (M5): `isolation: 'none'` means concurrent items
+ * literally share one process cwd, so `concurrency > 1` with a write-capable
+ * item step (`Edit`, `Write`, or `Bash` — `Bash` counts as write-capable
+ * since the engine can't tell read-only shell usage from a mutating one) is
+ * a structural race the loader can catch, not a caller footgun to document
+ * and hope is avoided. `isolation: 'worktree'` sidesteps that race (each
+ * item gets its own worktree) but only makes sense forked from the run's
+ * own branch (map.ts decision), which only exists when the run itself is
+ * `--isolation worktree` — requesting item-level worktrees under a
+ * `none`-isolated run is a load-time error, not a silent fallback. */
 const WRITE_CAPABLE_TOOLS = new Set(['Edit', 'Write', 'Bash'])
 
-function checkMapIsolation(steps: Step[]): void {
+function checkMapIsolation(steps: Step[], runIsolation: RunIsolation): void {
   for (const step of steps) {
-    if (step.kind === 'loop') checkMapIsolation(step.body)
+    if (step.kind === 'loop') checkMapIsolation(step.body, runIsolation)
     if (step.kind !== 'map') continue
 
     if (step.isolation === 'worktree') {
-      throw new WorkflowValidationError(
-        `step "${step.id}": isolation: 'worktree' is not supported until M5 — use isolation: 'none' ` +
-          `(M3's default) or omit isolation`,
-      )
-    }
-
-    const concurrency = step.concurrency ?? 4
-    if (concurrency > 1 && step.step.kind === 'agent') {
-      const writeTool = (step.step.tools ?? []).find((tool) => WRITE_CAPABLE_TOOLS.has(tool))
-      if (writeTool) {
+      if (runIsolation !== 'worktree') {
         throw new WorkflowValidationError(
-          `step "${step.id}": isolation: 'none' with concurrency ${concurrency} and item step ` +
-            `"${step.step.id}" declaring write-capable tool "${writeTool}" — concurrent items would ` +
-            `share one cwd and race; use concurrency: 1 or drop the write-capable tool`,
+          `step "${step.id}": isolation: 'worktree' requires the run itself to use --isolation worktree ` +
+            `(there's no run branch to fork an item worktree from otherwise) — use isolation: 'none' or ` +
+            `omit isolation, or run with --isolation worktree`,
         )
+      }
+    } else {
+      const concurrency = step.concurrency ?? 4
+      if (concurrency > 1 && step.step.kind === 'agent') {
+        const writeTool = (step.step.tools ?? []).find((tool) => WRITE_CAPABLE_TOOLS.has(tool))
+        if (writeTool) {
+          throw new WorkflowValidationError(
+            `step "${step.id}": isolation: 'none' with concurrency ${concurrency} and item step ` +
+              `"${step.step.id}" declaring write-capable tool "${writeTool}" — concurrent items would ` +
+              `share one cwd and race; use concurrency: 1 or drop the write-capable tool`,
+          )
+        }
       }
     }
 
-    checkMapIsolation([step.step])
+    checkMapIsolation([step.step], runIsolation)
   }
 }
 

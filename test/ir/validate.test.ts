@@ -139,7 +139,7 @@ describe('validateWorkflow', () => {
       await expect(validateWorkflow(wf)).resolves.toBeUndefined()
     })
 
-    it('allows isolation: "worktree" with concurrency > 1 and write tools — different isolation, no shared cwd', async () => {
+    it('allows isolation: "worktree" with concurrency > 1 and write tools when the run itself is worktree-isolated', async () => {
       const wf = workflow([
         command({ id: 'files', produces: 'changed-files' }),
         map({
@@ -150,7 +150,21 @@ describe('validateWorkflow', () => {
           step: agent({ id: 'review-one', tools: ['Edit'] }),
         }),
       ])
-      await expect(validateWorkflow(wf)).rejects.toThrow(/'worktree'.*not.*supported|M5/is)
+      await expect(validateWorkflow(wf, undefined, 'worktree')).resolves.toBeUndefined()
+    })
+
+    it('rejects isolation: "worktree" on a map step when the run itself is not --isolation worktree', async () => {
+      const wf = workflow([
+        command({ id: 'files', produces: 'changed-files' }),
+        map({
+          id: 'review',
+          over: 'changed-files',
+          isolation: 'worktree',
+          concurrency: 5,
+          step: agent({ id: 'review-one', tools: ['Edit'] }),
+        }),
+      ])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/isolation: 'worktree'.*requires the run itself/is)
     })
   })
 

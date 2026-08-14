@@ -1,3 +1,4 @@
+import path from 'node:path'
 import pLimit from 'p-limit'
 import { z } from 'zod'
 import type { AgentAdapter } from '../adapters/types.js'
@@ -12,6 +13,7 @@ import {
 import { appendJournalEvent } from '../engine/journal.js'
 import { inputNamesOf } from '../ir/graph.js'
 import type { ArtifactName, MapStep, StepId } from '../ir/types.js'
+import { createWorktree, WorktreeCreationError } from '../util/git.js'
 import { AgentStepFailedError, runAgentStep } from './agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from './command.js'
 import { runTransformStep } from './transform.js'
@@ -96,6 +98,34 @@ interface MapItemOutcome {
   failed: boolean
 }
 
+/** t03: `.yak/worktrees/<run-id>/<map-step-id>/<index>/` — sibling to the
+ * run's own worktree (`run.ts`'s `worktreePathFor`), reconstructed from
+ * `runDir` alone (`runDir` = `<runsDir>/<runId>`, and the `.yak` root is
+ * `runsDir`'s own parent) so map.ts never needs a `runsDir` field on
+ * `MapRunContext` just for this. */
+function itemWorktreePath(runDir: string, runId: string, mapStepId: string, index: number): string {
+  const runsDir = path.dirname(runDir)
+  const yakRoot = path.dirname(runsDir)
+  return path.join(yakRoot, '.yak', 'worktrees', runId, mapStepId, String(index))
+}
+
+/** t03: forks from `ctx.cwd` — which, whenever `step.isolation: 'worktree'`
+ * legally appears (load-time validation requires the run itself to be
+ * `--isolation worktree`), is already the run's own worktree, checked out
+ * on the run's branch. `'HEAD'` there is that branch's own tip, matching
+ * the map decision "an item sees whatever the run has already produced."
+ *
+ * The branch lives under `yak-item/`, a sibling namespace to the run's own
+ * `yak/<run-id>` branch — never nested under it. Git refs are a directory
+ * tree: `refs/heads/yak/<run-id>` is a leaf, so `refs/heads/yak/<run-id>/…`
+ * can't also exist (`fatal: cannot lock ref … 'refs/heads/yak/<run-id>'
+ * exists; cannot create …`). */
+async function ensureItemWorktree(step: MapStep, index: number, ctx: MapRunContext): Promise<string> {
+  const worktreePath = itemWorktreePath(ctx.runDir, ctx.runId, step.id, index)
+  await createWorktree(ctx.cwd, `yak-item/${ctx.runId}/${step.id}/${index}`, 'HEAD', worktreePath)
+  return worktreePath
+}
+
 /** Ticket 05: retries only apply under `onItemFailure: 'retry'` — `'skip'`
  * and `'fail'` never retry. Exhausting `RETRY_ATTEMPTS` falls back to
  * `'skip'`'s terminal state (`null` + the failure visible in the item's own
@@ -105,11 +135,25 @@ async function runMapItem(step: MapStep, item: unknown, index: number, ctx: MapR
   const onItemFailure = step.onItemFailure ?? 'skip'
   const maxAttempts = onItemFailure === 'retry' ? RETRY_ATTEMPTS + 1 : 1
 
+  // Memoized rather than created once up front — a successfully-created
+  // worktree is reused across retries (a second `add` for the same
+  // branch/path would collide), but a *failed* creation attempt goes
+  // through the same retry/journal machinery as any other item failure
+  // instead of crashing the whole map step.
+  let itemCwd: string | undefined
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const result = await runOneItemAttempt(step, item, index, ctx)
+      if (step.isolation === 'worktree' && itemCwd === undefined) {
+        itemCwd = await ensureItemWorktree(step, index, ctx)
+      }
+      const result = await runOneItemAttempt(step, item, index, ctx, itemCwd ?? ctx.cwd)
       return { result, failed: false }
-    } catch (err) {
+    } catch (rawErr) {
+      const err =
+        rawErr instanceof WorktreeCreationError
+          ? new CommandStepFailedError({ reason: 'command-failed', detail: rawErr.message, recoverable: false })
+          : rawErr
       if (!(err instanceof CommandStepFailedError || err instanceof AgentStepFailedError)) throw err
 
       if (attempt < maxAttempts) {
@@ -139,7 +183,13 @@ async function runMapItem(step: MapStep, item: unknown, index: number, ctx: MapR
  * index instead. The item step implicitly receives the current item as an
  * input named after `over` (spec's TS-shape `step: (file) => ...` made
  * concrete for the YAML IR, which has no per-item closure). */
-async function runOneItemAttempt(step: MapStep, item: unknown, index: number, ctx: MapRunContext): Promise<unknown> {
+async function runOneItemAttempt(
+  step: MapStep,
+  item: unknown,
+  index: number,
+  ctx: MapRunContext,
+  itemCwd: string,
+): Promise<unknown> {
   const itemStep = step.step
   const syntheticId = `${step.id}[${index}]`
 
@@ -178,15 +228,15 @@ async function runOneItemAttempt(step: MapStep, item: unknown, index: number, ct
   } else {
     try {
       if (itemStep.kind === 'command') {
-        result = runCommandStep(itemStep, ctx.cwd, {
+        result = runCommandStep(itemStep, itemCwd, {
           MAP_ITEM_INDEX: String(index),
           MAP_ITEM: JSON.stringify(item),
         })
       } else if (itemStep.kind === 'transform') {
-        result = await runTransformStep(itemStep, inputs, ctx.cwd)
+        result = await runTransformStep(itemStep, inputs, itemCwd)
       } else if (itemStep.kind === 'agent') {
         const adapter = ctx.buildAdapter(itemStep.id, index)
-        result = await runAgentStep(itemStep, inputs, { runId: ctx.runId, runDir: ctx.runDir, cwd: ctx.cwd, adapter })
+        result = await runAgentStep(itemStep, inputs, { runId: ctx.runId, runDir: ctx.runDir, cwd: itemCwd, adapter })
       } else {
         throw new Error(`step "${itemStep.id}": kind "${itemStep.kind}" not supported as a map item step in M3`)
       }
