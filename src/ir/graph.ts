@@ -1,4 +1,4 @@
-import type { AgentStep, ArtifactName, Step, StepId } from './types.js'
+import type { AgentStep, ArtifactName, MapStep, Step, StepId, Workflow } from './types.js'
 
 export function buildProducerMap(steps: Step[]): Map<ArtifactName, StepId> {
   const producerOf = new Map<ArtifactName, StepId>()
@@ -18,11 +18,24 @@ export function agentInputNames(step: AgentStep): ArtifactName[] {
   return [...names]
 }
 
+/** The artifact names a map step's item iterates or otherwise depends on:
+ * `needs` plus `over` — the list a map step fans out over is a real input
+ * (the item can't run before it exists) even though authors conventionally
+ * duplicate it into `needs` too; this doesn't require that duplication. */
+export function mapInputNames(step: MapStep): ArtifactName[] {
+  const names = new Set(step.needs ?? [])
+  names.add(step.over)
+  return [...names]
+}
+
 /** A step's full artifact input set — `needs`, widened by `context.inherit`
- * for an agent step. This is what both graph edges and cache keys must be
- * computed from: an inherited artifact is a real input, not just prose. */
+ * for an agent step or by `over` for a map step. This is what both graph
+ * edges and cache keys must be computed from: an inherited or fanned-over
+ * artifact is a real input, not just prose. */
 export function inputNamesOf(step: Step): ArtifactName[] {
-  return step.kind === 'agent' ? agentInputNames(step) : (step.needs ?? [])
+  if (step.kind === 'agent') return agentInputNames(step)
+  if (step.kind === 'map') return mapInputNames(step)
+  return step.needs ?? []
 }
 
 export function dependenciesOf(step: Step, producerOf: Map<ArtifactName, StepId>): StepId[] {
@@ -44,4 +57,35 @@ export function flattenSteps(steps: Step[]): Step[] {
     if (step.kind === 'map') result.push(...flattenSteps([step.step]))
   }
   return result
+}
+
+/** t04: `yak graph`'s Mermaid emission — deliberately not gated behind
+ * `validateWorkflow` (a caller may want to graph an invalid workflow to see
+ * *why* it's invalid). Every step is its own node, including a `loop`'s
+ * body or a `map`'s item step — a `loop`/`map` step itself becomes a
+ * Mermaid `subgraph` (addressable as an edge endpoint in its own right,
+ * same as any node id) rather than a node alongside its nested steps. */
+export function renderMermaid(workflow: Workflow): string {
+  const producerOf = buildProducerMap(flattenSteps(workflow.steps))
+  const lines: string[] = ['flowchart TD']
+  renderStepList(workflow.steps, producerOf, lines)
+  return lines.join('\n')
+}
+
+function renderStepList(steps: Step[], producerOf: Map<ArtifactName, StepId>, lines: string[]): void {
+  for (const step of steps) {
+    const nested = step.kind === 'loop' ? step.body : step.kind === 'map' ? [step.step] : undefined
+    if (nested) {
+      lines.push(`  subgraph ${step.id}`)
+      renderStepList(nested, producerOf, lines)
+      lines.push('  end')
+    } else {
+      lines.push(`  ${step.id}[${step.id}]`)
+    }
+
+    for (const name of inputNamesOf(step)) {
+      const producer = producerOf.get(name)
+      if (producer) lines.push(`  ${producer} -->|${name}| ${step.id}`)
+    }
+  }
 }
