@@ -20,4 +20,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 1rem;
+}
+
+.section {
+  padding: 2rem 0;
+}
+
+.section:nth-child(even) {
+  background-color: var(--ifm-color-emphasis-100);
 }
