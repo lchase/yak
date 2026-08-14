@@ -5,7 +5,7 @@ steps:
     agent:
       prompt: { file: "fixtures/batch-issues/prompts/triage.md" }
       schema: TriageSchema
-      tools: [Read, Write]
+      tools: [Read, Glob, Write]
     produces: triage
 
   - id: issues
