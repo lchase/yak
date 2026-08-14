@@ -9,8 +9,8 @@ Clone, install, and run yak's reference workflow end to end — no API key,
 no cost. This uses the `mock` adapter, so every agent step returns a
 canned, deterministic response; it exists to prove the engine itself
 works (scheduling, caching, journaling, resume) before you spend real
-budget on a real run. The tutorial page (next in the sidebar) does that
-part, fixing an actual bug with the real `claude-code` adapter.
+budget on a real run. The [tutorial](./tutorial) does that part, fixing
+an actual bug with the real `claude-code` adapter.
 
 ## Prerequisites
 
@@ -92,7 +92,7 @@ already.
 
 ## Next: fix a real bug
 
-The quickstart proves the engine runs. The tutorial (next in the
-sidebar) proves yak does something useful: it walks through fixing an
-actual bug in a real (if small) codebase, using the real `claude-code`
-adapter — the only page on this site that spends real API budget.
+The quickstart proves the engine runs. The [tutorial](./tutorial) proves
+yak does something useful: it walks through fixing an actual bug in a
+real (if small) codebase, using the real `claude-code` adapter — the
+only page on this site that spends real API budget.

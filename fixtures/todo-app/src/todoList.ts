@@ -13,5 +13,5 @@ export function completeTodo(todos: Todo[], id: string): Todo[] {
 }
 
 export function pendingTodos(todos: Todo[]): Todo[] {
-  return todos.filter((t) => !t.done)
+  return todos.filter((t) => t.done)
 }
