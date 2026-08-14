@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readdir, stat } from 'node:fs/promises'
+import { mkdtemp, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { createWorktree, WorktreeCreationError } from '../../src/util/git.js'
+import { commitAllIfDirty, createWorktree, WorktreeCreationError } from '../../src/util/git.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -86,5 +86,32 @@ describe('createWorktree', () => {
 
     const entries = await readdir(worktreesDir)
     expect(entries).toEqual(['run-1'])
+  })
+})
+
+describe('commitAllIfDirty', () => {
+  it('stages and commits every change under a fixed engine identity, distinct from the repo committer', async () => {
+    const repoRoot = await initRepoWithCommit()
+    await execFileAsync('git', ['config', 'user.email', 'human@example.com'], { cwd: repoRoot })
+    await execFileAsync('git', ['config', 'user.name', 'Human'], { cwd: repoRoot })
+    await writeFile(path.join(repoRoot, 'new.txt'), 'hi\n', 'utf8')
+
+    await commitAllIfDirty(repoRoot, 'yak: checkpoint before map review')
+
+    const { stdout: log } = await execFileAsync('git', ['log', '-1', '--format=%an <%ae> %s'], { cwd: repoRoot })
+    expect(log.trim()).toBe('yak <engine@yak.local> yak: checkpoint before map review')
+
+    const { stdout: status } = await execFileAsync('git', ['status', '--porcelain'], { cwd: repoRoot })
+    expect(status.trim()).toBe('')
+  })
+
+  it('does nothing on a clean tree — no empty commit', async () => {
+    const repoRoot = await initRepoWithCommit()
+    const { stdout: before } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+
+    await commitAllIfDirty(repoRoot, 'yak: checkpoint before map review')
+
+    const { stdout: after } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+    expect(after.trim()).toBe(before.trim())
   })
 })

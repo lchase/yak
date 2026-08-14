@@ -95,6 +95,68 @@ describe('map step isolation: worktree', () => {
     expect((await stat(itemWorktreePath)).isDirectory()).toBe(true)
   })
 
+  it('commits prior step output before forking item worktrees, so items see it', async () => {
+    const repoRoot = await initRepoWithCommit()
+    await writeFile(path.join(repoRoot, 'tracked.txt'), 'original\n', 'utf8')
+    await execFileAsync('git', ['add', 'tracked.txt'], { cwd: repoRoot })
+    await execFileAsync('git', ['commit', '-m', 'seed tracked.txt'], { cwd: repoRoot })
+
+    await mkdir(path.join(repoRoot, '.yak'), { recursive: true })
+    await writeFile(
+      path.join(repoRoot, '.yak', 'transforms.ts'),
+      "export function threeItems() { return ['a', 'b', 'c'] }\n",
+      'utf8',
+    )
+    await execFileAsync('git', ['add', '.yak/transforms.ts'], { cwd: repoRoot })
+    await execFileAsync('git', ['commit', '-m', 'add transforms'], { cwd: repoRoot })
+
+    const workflowPath = path.join(repoRoot, 'workflow.yaml')
+    await writeFile(
+      workflowPath,
+      [
+        'name: map-isolation-sees-prior-output',
+        'version: "1"',
+        'steps:',
+        '  - id: modify',
+        // Deliberately not committed by the workflow itself — only the
+        // engine's checkpoint-before-fan-out should commit this.
+        '    command: { run: "echo modified-by-yak > tracked.txt", capture: [exitCode] }',
+        '    produces: modifyResult',
+        '  - id: items',
+        '    needs: [modifyResult]',
+        '    transform: { fn: threeItems }',
+        '    produces: items',
+        '  - id: review',
+        '    needs: [items]',
+        '    map:',
+        '      over: items',
+        '      isolation: worktree',
+        '      step:',
+        '        id: review-one',
+        '        command: { run: "cat tracked.txt > marker.txt" }',
+        '    produces: findings',
+      ].join('\n'),
+      'utf8',
+    )
+    const runsDir = path.join(repoRoot, '.runs')
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir, cwd: repoRoot, isolation: 'worktree' })
+
+    expect(result.status).toBe('ok')
+
+    const itemWorktreePath = path.join(repoRoot, '.yak', 'worktrees', result.runId, 'review', '0')
+    const marker = await readFile(path.join(itemWorktreePath, 'marker.txt'), 'utf8')
+    expect(marker.trim()).toBe('modified-by-yak')
+
+    // The commit landed on the run's own branch, under the fixed engine
+    // identity, not the repo's configured committer.
+    const runWorktreePath = path.join(repoRoot, '.yak', 'worktrees', result.runId)
+    const { stdout: log } = await execFileAsync('git', ['log', '-1', '--format=%an <%ae> %s'], {
+      cwd: runWorktreePath,
+    })
+    expect(log.trim()).toBe('yak <engine@yak.local> yak: checkpoint before map review')
+  })
+
   it('rejects at load time when isolation: worktree is set on a map step but the run itself is not', async () => {
     const repoRoot = await initRepoWithCommit()
     const workflowPath = await writeMapIsolationWorkflow(repoRoot)

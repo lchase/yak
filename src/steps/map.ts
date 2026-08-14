@@ -13,7 +13,7 @@ import {
 import { appendJournalEvent } from '../engine/journal.js'
 import { inputNamesOf } from '../ir/graph.js'
 import type { ArtifactName, MapStep, StepId } from '../ir/types.js'
-import { createWorktree, WorktreeCreationError } from '../util/git.js'
+import { commitAllIfDirty, createWorktree, WorktreeCreationError } from '../util/git.js'
 import { AgentStepFailedError, runAgentStep } from './agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from './command.js'
 import { runTransformStep } from './transform.js'
@@ -49,6 +49,15 @@ export async function runMapStep(step: MapStep, ctx: MapRunContext): Promise<'ok
     semanticKey: ctx.semanticKey,
     definitionKey: ctx.definitionKey,
   })
+
+  // Post-M5 gaps map, ticket 01: item worktrees fork off `HEAD` — commit
+  // this run's own prior step output first, once, before any item forks,
+  // so items don't fork from a stale tree. Only worktree-isolated items
+  // fork at all; `isolation: 'none'` items share ctx.cwd directly and
+  // need no commit.
+  if (step.isolation === 'worktree') {
+    await commitAllIfDirty(ctx.cwd, `yak: checkpoint before map ${step.id}`)
+  }
 
   const items = (await readArtifactRaw(ctx.runDir, step.over)) as unknown[]
   const limit = pLimit(Math.min(step.concurrency ?? 4, ctx.globalConcurrency))
