@@ -533,9 +533,9 @@ Realistic sizing: M0–M2 is a long weekend if you're fluent in the ecosystem. M
 
 9. **Budget ceilings suspend, not fail.** A run that hit a token or dollar cap is by definition a decision only the human can make. Same reasoning as `onExhausted: 'suspend'`.
 
-10. **Eval corpus: export path built in M4, alongside gates.** `.runs/` stays gitignored. `yak export --evals` writes normalized JSONL to a committed `.yak/evals/` — one record per gate answer, schema repair, and loop exhaustion, storing hashes and the verdict rather than raw prompts and artifacts.
+10. **Eval corpus: export path descoped from M4, not built.** M4's map (`.scratch/yak-m4/map.md`) ruled `yak export --evals` out of scope, and the post-M5 gaps map (`.scratch/yak-post-m5/map.md`) confirmed that scoping rather than reopening it — this is a future candidate, not a live decision. `.runs/` stays gitignored in the meantime, so gate answers, schema repairs, and loop exhaustions from every run before this ships are lost to the eval corpus permanently.
 
-    Built now rather than retrofitted because the verdict exists only at the moment the gate is answered; every gate answered before the export path exists is data lost permanently.
+    If built: `yak export --evals` would write normalized JSONL to a committed `.yak/evals/` — one record per gate answer, schema repair, and loop exhaustion, storing hashes and the verdict rather than raw prompts and artifacts.
 
     **Design goal this unlocks: gates should be demotable.** Once a gate has enough labeled examples, write a check step that predicts the verdict, run it in shadow mode beside the real gate, and promote it to `skipIf` when agreement holds. This is the mechanism by which a workflow becomes progressively more hands-free instead of permanently needing a human at the same six points.
 
