@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { readJournal } from '../../engine/journal.js'
 import { defaultRunsDir, findLatestRunId, readRunWorkflow } from '../../engine/run.js'
-import { loopStatusFromJournal, stepStatusesFromJournal } from '../../engine/status.js'
+import { formatLoopBudget, loopStatusFromJournal, stepStatusesFromJournal } from '../../engine/status.js'
 
 export interface StatusOptions {
   runsDir?: string
@@ -33,12 +33,8 @@ export async function statusCommand(runId: string | undefined, opts: StatusOptio
     const step = workflow.steps.find((s) => s.id === stepId)
     if (step?.kind === 'loop') {
       const detail = loopStatusFromJournal(step, events)
-      const budget =
-        detail.maxTokens !== undefined
-          ? `iteration ${detail.iteration}/${detail.maxIterations}, tokens ${detail.consumedTokens}/${detail.maxTokens}`
-          : `iteration ${detail.iteration}/${detail.maxIterations}, tokens ${detail.consumedTokens}`
       const signal = detail.noProgressSignal !== undefined ? `, noProgress signal ${detail.noProgressSignal}` : ''
-      console.log(`    ${budget}${signal}`)
+      console.log(`    ${formatLoopBudget(detail)}${signal}`)
     }
   }
 

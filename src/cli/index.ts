@@ -7,6 +7,7 @@ import { pendingCommand } from './commands/pending.js'
 import { resumeCommand } from './commands/resume.js'
 import { runCommand } from './commands/run.js'
 import { statusCommand } from './commands/status.js'
+import { watchCommand } from './commands/watch.js'
 
 function requireAdapterId(value: string): AdapterId {
   if (value !== 'mock' && value !== 'claude-code') {
@@ -74,6 +75,14 @@ program
   .argument('<workflow>', 'path to the workflow YAML file')
   .action(async (workflow: string) => {
     process.exitCode = await graphCommand(workflow)
+  })
+
+program
+  .command('watch')
+  .description("Live-tail a run's step statuses in a terminal UI")
+  .argument('[run-id]', 'id of the run to watch (default: most recent)')
+  .action(async (runId: string | undefined) => {
+    process.exitCode = await watchCommand(runId)
   })
 
 program

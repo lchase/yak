@@ -84,3 +84,11 @@ export function loopStatusFromJournal(step: LoopStep, events: JournalEnvelope[])
     ...(noProgressSignal !== undefined ? { noProgressSignal } : {}),
   }
 }
+
+/** Shared by `yak status` and `yak watch` — the one-line iteration/budget
+ * summary for a loop's current state. */
+export function formatLoopBudget(detail: LoopStatusDetail): string {
+  return detail.maxTokens !== undefined
+    ? `iteration ${detail.iteration}/${detail.maxIterations}, tokens ${detail.consumedTokens}/${detail.maxTokens}`
+    : `iteration ${detail.iteration}/${detail.maxIterations}, tokens ${detail.consumedTokens}`
+}
