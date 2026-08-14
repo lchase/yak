@@ -4,10 +4,11 @@ import path from 'node:path'
 import { flattenSteps } from '../ir/graph.js'
 import { loadWorkflowYaml } from '../ir/load.js'
 import { normalizeWorkflow } from '../ir/normalize.js'
-import type { AdapterId, StepId, Workflow } from '../ir/types.js'
+import type { AdapterId, RunIsolation, StepId, Workflow } from '../ir/types.js'
 import { validateWorkflow } from '../ir/validate.js'
 import { completeGate } from '../steps/gate.js'
 import { resolveAgentSchema } from '../steps/agent.js'
+import { createWorktree } from '../util/git.js'
 import { sha256 } from '../util/hash.js'
 import { appendJournalEvent, completedStepsFromJournal, readJournal } from './journal.js'
 import { runEligibleSteps } from './scheduler.js'
@@ -20,6 +21,7 @@ export interface ExecuteOptions {
   cwd?: string
   cacheDir?: string
   adapter?: AdapterId
+  isolation?: RunIsolation
 }
 
 export interface ExecuteResult {
@@ -41,6 +43,13 @@ function resolveDirs(runsDir: string | undefined, cwd: string | undefined, cache
   }
 }
 
+/** `.yak/worktrees/<run-id>/` — sibling to `.yak/cache`, deterministic from
+ * `runsDir` and `runId` alone so a resumed run can recompute the same path
+ * without re-reading anything. */
+function worktreePathFor(runsDir: string, runId: string): string {
+  return path.join(path.dirname(runsDir), '.yak', 'worktrees', runId)
+}
+
 function generateRunId(): string {
   const iso = new Date().toISOString() // e.g. 2026-08-08T14:03:11.123Z
   const [datePart, timePart] = iso.split('T')
@@ -55,6 +64,7 @@ export async function executeWorkflowFile(
 ): Promise<ExecuteResult> {
   const { runsDir, cwd, cacheDir } = resolveDirs(opts.runsDir, opts.cwd, opts.cacheDir)
   const adapter = opts.adapter ?? DEFAULT_ADAPTER
+  const isolation = opts.isolation ?? 'none'
 
   const raw = await loadWorkflowYaml(workflowPath)
   const workflow = normalizeWorkflow(raw)
@@ -71,9 +81,28 @@ export async function executeWorkflowFile(
     workflow: workflow.name,
     inputHash: sha256(JSON.stringify(workflow)),
     adapter,
+    isolation,
   })
 
-  const status = await runEligibleSteps(workflow, { runId, runDir, cwd, cacheDir, adapter })
+  // `runsDir`/`cacheDir` stay anchored to the original repo regardless of
+  // isolation — only the step-execution cwd swaps into the worktree.
+  let stepCwd = cwd
+  if (isolation === 'worktree') {
+    const worktreePath = worktreePathFor(runsDir, runId)
+    try {
+      await createWorktree(cwd, `yak/${runId}`, 'HEAD', worktreePath)
+    } catch {
+      // A worktree-add failure (e.g. a race against another concurrent run)
+      // is an ordinary run failure, not an uncaught exception — it goes
+      // through the same run.finished/'failed' path every other failure
+      // does, so callers only ever see the ExecuteResult status contract.
+      await appendJournalEvent(runDir, runId, { t: 'run.finished', status: 'failed' })
+      return { runId, runDir, status: 'failed' }
+    }
+    stepCwd = worktreePath
+  }
+
+  const status = await runEligibleSteps(workflow, { runId, runDir, cwd: stepCwd, cacheDir, adapter })
 
   await appendJournalEvent(runDir, runId, { t: 'run.finished', status })
 
@@ -186,9 +215,22 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
     )
   }
 
+  // Same reasoning as the adapter check above: isolation is a per-run
+  // constant persisted on `run.started`, so a conflicting override is
+  // rejected rather than silently honored. A worktree-isolated run's
+  // worktree already exists from its first execution — resume just points
+  // steps back at it, never recreates it.
+  const persistedIsolation = startedEvent?.isolation ?? 'none'
+  if (opts.isolation !== undefined && opts.isolation !== persistedIsolation) {
+    throw new Error(
+      `run ${runId} started with isolation "${persistedIsolation}" — cannot resume with isolation "${opts.isolation}"`,
+    )
+  }
+  const stepCwd = persistedIsolation === 'worktree' ? worktreePathFor(runsDir, runId) : cwd
+
   const status = await runEligibleSteps(
     workflow,
-    { runId, runDir, cwd, cacheDir, adapter: persistedAdapter, loopContinuations },
+    { runId, runDir, cwd: stepCwd, cacheDir, adapter: persistedAdapter, loopContinuations },
     resumeState,
   )
 

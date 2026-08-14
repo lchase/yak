@@ -27,6 +27,7 @@ async function writeCompletedRun(runsDir: string, runId: string): Promise<void> 
     workflow: 'minimal',
     inputHash: 'irrelevant',
     adapter: 'mock',
+    isolation: 'none',
   })
   await appendJournalEvent(runDir, runId, {
     t: 'step.started',

@@ -2,7 +2,7 @@ import path from 'node:path'
 import { readJournal } from '../../engine/journal.js'
 import { executeWorkflowFile, readRunWorkflow, resumeRun } from '../../engine/run.js'
 import { openRequestStepIds, readPendingRequest, writeAnswer } from '../../engine/suspend.js'
-import type { AdapterId } from '../../ir/types.js'
+import type { AdapterId, RunIsolation } from '../../ir/types.js'
 import { promptForAnswer, terminalAsk } from '../interactive.js'
 
 const EX_SUSPEND = 78
@@ -10,6 +10,7 @@ const EX_SUSPEND = 78
 export interface RunCommandOptions {
   adapter?: AdapterId
   interactive?: boolean
+  isolation?: RunIsolation
 }
 
 /**
@@ -36,7 +37,10 @@ async function answerOpenRequestsInteractively(runId: string, runDir: string): P
 }
 
 export async function runCommand(workflowPath: string, opts: RunCommandOptions = {}): Promise<number> {
-  let result = await executeWorkflowFile(path.resolve(workflowPath), { adapter: opts.adapter })
+  let result = await executeWorkflowFile(path.resolve(workflowPath), {
+    adapter: opts.adapter,
+    isolation: opts.isolation,
+  })
 
   while (opts.interactive && result.status === 'suspended') {
     await answerOpenRequestsInteractively(result.runId, result.runDir)
