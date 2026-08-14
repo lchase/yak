@@ -2,5 +2,7 @@ node_modules/
 dist/
 .runs/
 .scratch/
+.yak/cache/
+.yak/worktrees/
 *.log
 .DS_Store
