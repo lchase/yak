@@ -21,6 +21,7 @@ steps:
       concurrency: 3
       step:
         id: fix-one
+        needs: [issues]
         agent:
           prompt:
             inline: >
