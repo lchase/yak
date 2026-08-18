@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { ZodBoolean, ZodDefault, ZodEnum, ZodNumber, ZodObject, ZodOptional, ZodString, ZodType } from 'zod'
 import { extractTemplateRoots } from '../expr/template.js'
 import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps } from './graph.js'
@@ -59,6 +61,39 @@ export async function validateWorkflow(
   checkMapIsolation(workflow.steps, runIsolation)
   await checkGateSchemaKeys(flatSteps, cwd)
   await checkGateRenderPlaceholders(flatSteps, cwd)
+  checkSandboxImage(flatSteps)
+  await checkDockerAvailable(flatSteps)
+}
+
+/** Ticket 04/05 (roadmap map): `sandbox: 'docker'` has no yak-shipped
+ * default image — yak doesn't know a step's toolchain, so a missing
+ * `image` is a load-time error rather than a cryptic run-time failure. */
+function checkSandboxImage(steps: Step[]): void {
+  for (const step of steps) {
+    if (step.kind !== 'command' || step.sandbox !== 'docker') continue
+    if (!step.image) {
+      throw new WorkflowValidationError(
+        `step "${step.id}": sandbox: 'docker' requires an "image" field — yak has no default image`,
+      )
+    }
+  }
+}
+
+const execFileAsync = promisify(execFile)
+
+/** Ticket 04/05: fail the whole workflow before any run starts if
+ * `docker` isn't on PATH but some step needs it — same "fail where the
+ * workflow author can see it" reasoning as every other check in this
+ * file, rather than discovering it mid-run on the first sandboxed step. */
+async function checkDockerAvailable(steps: Step[]): Promise<void> {
+  if (!steps.some((step) => step.kind === 'command' && step.sandbox === 'docker')) return
+  try {
+    await execFileAsync('docker', ['--version'])
+  } catch {
+    throw new WorkflowValidationError(
+      `workflow uses sandbox: 'docker' on at least one step, but the "docker" binary was not found on PATH`,
+    )
+  }
 }
 
 /** Ticket 07 (M3) / t03 (M5): `isolation: 'none'` means concurrent items

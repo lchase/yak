@@ -22,6 +22,37 @@ export class CommandStepFailedError extends Error {
  * Implementation constant, not a config field — see ticket 02. */
 const KILL_GRACE_MS = 5_000
 
+/** Docker CLI convention: `docker run` itself exits 125 when the container
+ * never started (bad image, daemon unreachable, invalid invocation) — as
+ * opposed to the exit code of the command running *inside* the container,
+ * which passes through unchanged. Used to distinguish `'sandbox-error'`
+ * from `'command-failed'` — see ticket 04/05, roadmap map. */
+const DOCKER_CLI_ERROR_EXIT_CODE = 125
+
+/** Ticket 04/05: fixed `/workspace` bind-mount + working dir convention,
+ * `--network none` with no opt-out, `--rm` per-step lifecycle (no
+ * persistent container). `--sig-proxy` defaults to `true`, so SIGTERM
+ * sent to this `docker run` process forwards into the container —
+ * idle-timeout's SIGTERM/SIGKILL sequence needs no docker-specific
+ * handling beyond building the right argv. */
+export function dockerRunArgs(step: CommandStep, cwd: string): string[] {
+  const workdir = step.cwd ? `/workspace/${step.cwd}` : '/workspace'
+  return [
+    'run',
+    '--rm',
+    '--network',
+    'none',
+    '-v',
+    `${cwd}:/workspace`,
+    '-w',
+    workdir,
+    step.image!,
+    'sh',
+    '-c',
+    step.run,
+  ]
+}
+
 /** Splits a stream chunk into complete lines, invoking `onLine` for each,
  * and returns the trailing partial line to carry into the next chunk. */
 function feedLines(carry: string, chunk: string, onLine: () => void): string {
@@ -49,11 +80,16 @@ export function runCommandStep(
   const failOn = step.failOn ?? 'exitCode'
 
   return new Promise((resolve, reject) => {
-    const child = spawn(step.run, {
-      cwd: step.cwd ?? cwd,
-      shell: true,
-      ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
-    })
+    const child =
+      step.sandbox === 'docker'
+        ? spawn('docker', dockerRunArgs(step, cwd), {
+            ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
+          })
+        : spawn(step.run, {
+            cwd: step.cwd ?? cwd,
+            shell: true,
+            ...(extraEnv ? { env: { ...process.env, ...extraEnv } } : {}),
+          })
 
     let stdout = ''
     let stderr = ''
@@ -100,11 +136,17 @@ export function runCommandStep(
       settled = true
       clearTimers()
       reject(
-        new CommandStepFailedError({
-          reason: 'command-failed',
-          detail: `command "${step.run}" failed to start: ${err.message}`,
-          recoverable: false,
-        }),
+        step.sandbox === 'docker'
+          ? new CommandStepFailedError({
+              reason: 'sandbox-error',
+              detail: `docker failed to start for command "${step.run}": ${err.message}`,
+              recoverable: false,
+            })
+          : new CommandStepFailedError({
+              reason: 'command-failed',
+              detail: `command "${step.run}" failed to start: ${err.message}`,
+              recoverable: false,
+            }),
       )
     })
 
@@ -130,6 +172,20 @@ export function runCommandStep(
       if (capture.includes('stdout')) result.stdout = stdout
       if (capture.includes('stderr')) result.stderr = stderr
       if (capture.includes('exitCode')) result.exitCode = exitCode
+
+      if (step.sandbox === 'docker' && exitCode === DOCKER_CLI_ERROR_EXIT_CODE) {
+        reject(
+          new CommandStepFailedError({
+            reason: 'sandbox-error',
+            detail:
+              `docker run exited ${DOCKER_CLI_ERROR_EXIT_CODE} for command "${step.run}" ` +
+              `(image "${step.image}") — the container never started (bad image, daemon unreachable, ` +
+              `invalid docker invocation), not the command inside it failing`,
+            recoverable: false,
+          }),
+        )
+        return
+      }
 
       if (failOn === 'exitCode' && exitCode !== 0) {
         reject(

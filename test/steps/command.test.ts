@@ -1,9 +1,29 @@
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { CommandStep } from '../../src/ir/types.js'
-import { CommandStepFailedError, runCommandStep } from '../../src/steps/command.js'
+import { CommandStepFailedError, dockerRunArgs, runCommandStep } from '../../src/steps/command.js'
 
 function step(overrides: Partial<CommandStep>): CommandStep {
   return { id: 'test-step', kind: 'command', run: 'true', ...overrides }
+}
+
+/** Ticket 05: a fake `docker` binary placed first on `PATH` (via
+ * `runCommandStep`'s `extraEnv`, which is merged over `process.env`), so
+ * sandbox-error tests exercise the real spawn/close path without
+ * requiring a real Docker install (or a running daemon) on the test
+ * machine. */
+async function withFakeDocker(exitCode: number, run: (extraEnv: Record<string, string>) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'yak-fake-docker-'))
+  const binPath = path.join(dir, 'docker')
+  await writeFile(binPath, `#!/bin/sh\nexit ${exitCode}\n`)
+  await chmod(binPath, 0o755)
+  try {
+    await run({ PATH: `${dir}:${process.env.PATH}` })
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 }
 
 describe('runCommandStep', () => {
@@ -42,6 +62,60 @@ describe('runCommandStep', () => {
     await failing.catch((err: CommandStepFailedError) => {
       expect(err.failure.reason).toBe('timeout')
       expect(err.failure.recoverable).toBe(false)
+    })
+  })
+
+  describe('sandbox: docker', () => {
+    it('builds the expected docker run argv — fixed /workspace mount, --network none, --rm', () => {
+      const args = dockerRunArgs(
+        step({ run: 'npm test', sandbox: 'docker', image: 'node:22' }),
+        '/host/worktree',
+      )
+      expect(args).toEqual([
+        'run',
+        '--rm',
+        '--network',
+        'none',
+        '-v',
+        '/host/worktree:/workspace',
+        '-w',
+        '/workspace',
+        'node:22',
+        'sh',
+        '-c',
+        'npm test',
+      ])
+    })
+
+    it('nests the working dir under /workspace when step.cwd is set', () => {
+      const args = dockerRunArgs(
+        step({ run: 'npm test', sandbox: 'docker', image: 'node:22', cwd: 'packages/app' }),
+        '/host/worktree',
+      )
+      expect(args).toContain('-w')
+      expect(args[args.indexOf('-w') + 1]).toBe('/workspace/packages/app')
+      // mount source is always the worktree root, unaffected by step.cwd
+      expect(args).toContain('/host/worktree:/workspace')
+    })
+
+    it('fails with sandbox-error, not command-failed, when the container never starts (docker CLI exit 125)', async () => {
+      await withFakeDocker(125, async (extraEnv) => {
+        await expect(
+          runCommandStep(step({ run: 'echo hi', sandbox: 'docker', image: 'does-not-exist' }), process.cwd(), extraEnv),
+        ).rejects.toMatchObject({
+          failure: { reason: 'sandbox-error', recoverable: false },
+        })
+      })
+    })
+
+    it('still reports command-failed for a normal nonzero exit from inside the container', async () => {
+      await withFakeDocker(3, async (extraEnv) => {
+        await expect(
+          runCommandStep(step({ run: 'exit 3', sandbox: 'docker', image: 'node:22' }), process.cwd(), extraEnv),
+        ).rejects.toMatchObject({
+          failure: { reason: 'command-failed', recoverable: false },
+        })
+      })
     })
   })
 })

@@ -328,4 +328,38 @@ describe('validateWorkflow', () => {
       warn.mockRestore()
     })
   })
+
+  describe('sandbox: docker', () => {
+    it('rejects a command step with sandbox: docker but no image', async () => {
+      const wf = workflow([command({ id: 'a', sandbox: 'docker' })])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/requires an "image" field/)
+    })
+
+    it('accepts a command step with sandbox: docker and an image, when docker is on PATH', async () => {
+      const wf = workflow([command({ id: 'a', sandbox: 'docker', image: 'node:22' })])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
+
+    it('rejects sandbox: docker workflows when the docker binary is not on PATH', async () => {
+      const wf = workflow([command({ id: 'a', sandbox: 'docker', image: 'node:22' })])
+      const originalPath = process.env.PATH
+      process.env.PATH = ''
+      try {
+        await expect(validateWorkflow(wf)).rejects.toThrow(/"docker" binary was not found on PATH/)
+      } finally {
+        process.env.PATH = originalPath
+      }
+    })
+
+    it('does not check for docker when no step uses sandbox: docker', async () => {
+      const originalPath = process.env.PATH
+      process.env.PATH = ''
+      try {
+        const wf = workflow([command({ id: 'a' })])
+        await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+      } finally {
+        process.env.PATH = originalPath
+      }
+    })
+  })
 })

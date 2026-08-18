@@ -37,6 +37,8 @@ export interface CommandStep extends BaseStep {
   failOn?: 'exitCode' | 'never'        // default 'exitCode' — see §9 #6
   capture?: ('stdout' | 'stderr' | 'exitCode')[]
   idleTimeoutMs?: number               // default undefined (disabled) — time since last onLine, not total wall clock
+  sandbox?: 'docker' | 'none'          // default 'none' — see ticket 04, roadmap map
+  image?: string                       // required when sandbox: 'docker', no yak-shipped default
 }
 
 export interface TransformStep extends BaseStep {
@@ -83,7 +85,7 @@ export interface StepFailure {
   reason:
     | 'needs-decision' | 'needs-context' | 'schema-invalid'
     | 'budget-exhausted' | 'tool-denied' | 'adapter-error' | 'command-failed'
-    | 'timeout'
+    | 'timeout' | 'sandbox-error'
   detail: string
   recoverable: boolean
 }
