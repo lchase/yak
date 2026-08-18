@@ -283,7 +283,7 @@ async function runStep(
   let result: unknown
   try {
     if (step.kind === 'command') {
-      result = runCommandStep(step, ctx.cwd)
+      result = await runCommandStep(step, ctx.cwd)
     } else if (step.kind === 'transform') {
       const inputs: Record<string, unknown> = {}
       for (const need of step.needs ?? []) {

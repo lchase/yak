@@ -237,7 +237,7 @@ async function runOneItemAttempt(
   } else {
     try {
       if (itemStep.kind === 'command') {
-        result = runCommandStep(itemStep, itemCwd, {
+        result = await runCommandStep(itemStep, itemCwd, {
           MAP_ITEM_INDEX: String(index),
           MAP_ITEM: JSON.stringify(item),
         })

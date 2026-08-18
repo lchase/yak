@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { ArtifactName, Step } from '../ir/types.js'
 import { sha256 } from '../util/hash.js'
@@ -108,7 +109,16 @@ export async function readCacheEntry(
   return raw === undefined ? undefined : (JSON.parse(raw) as CacheEntry)
 }
 
+/** Writes via a per-write temp file + rename so a concurrent
+ * `readCacheEntry` (same key, another run sharing this cache dir) never
+ * observes a partially-written file — `rename` is atomic on the same
+ * filesystem, a plain `writeFile` is not. Surfaced by ticket 03 switching
+ * `command` steps off `spawnSync`: previously the blocking syscall
+ * serialized the whole event loop, incidentally masking this race. */
 export async function writeCacheEntry(cacheDir: string, entry: CacheEntry): Promise<void> {
   await mkdir(cacheDir, { recursive: true })
-  await writeFile(entryPath(cacheDir, entry.semanticKey), JSON.stringify(entry, null, 2), 'utf8')
+  const finalPath = entryPath(cacheDir, entry.semanticKey)
+  const tmpPath = path.join(cacheDir, `.${entry.semanticKey}.${randomUUID()}.tmp`)
+  await writeFile(tmpPath, JSON.stringify(entry, null, 2), 'utf8')
+  await rename(tmpPath, finalPath)
 }

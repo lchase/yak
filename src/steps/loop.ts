@@ -398,7 +398,7 @@ async function runBodyStepKind(
   iteration: number,
 ): Promise<unknown> {
   try {
-    if (bodyStep.kind === 'command') return runCommandStep(bodyStep, ctx.cwd)
+    if (bodyStep.kind === 'command') return await runCommandStep(bodyStep, ctx.cwd)
     if (bodyStep.kind === 'transform') return await runTransformStep(bodyStep, inputs, ctx.cwd)
     if (bodyStep.kind === 'agent') {
       const adapter = ctx.buildAdapter(bodyStep.id, iteration)

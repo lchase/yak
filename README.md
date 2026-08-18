@@ -20,8 +20,10 @@ types. See `spec.md` §8.
 M0 is zero-AI by design — a boring shell pipeline has to cache, resume, and
 journal correctly before nondeterministic steps go anywhere near it.
 
-- **Step kinds:** `command` (shell exec, capture stdout/stderr/exitCode),
-  `transform` (named pure function from `.yak/transforms.ts`), `agent`
+- **Step kinds:** `command` (streamed shell exec, capture stdout/stderr/
+  exitCode, optional `idleTimeoutMs` — SIGTERM then SIGKILL after a grace
+  period, `StepFailure.reason: 'timeout'`), `transform` (named pure
+  function from `.yak/transforms.ts`), `agent`
   (prompt from `{ file }`/`{ inline }` with `{{placeholder}}` interpolation,
   `context: 'fresh' | { inherit } | { session }`, Zod schema validation via
   `.yak/schemas.ts`, schema repair loop with retries), `loop` (bounded by

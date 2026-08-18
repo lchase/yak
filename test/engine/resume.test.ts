@@ -47,7 +47,7 @@ async function setUpInterruptedRun(dir: string): Promise<{
   const lint = workflow.steps.find((s) => s.id === 'lint') as CommandStep
   const test = workflow.steps.find((s) => s.id === 'test') as CommandStep
 
-  const installResult = runCommandStep(install, process.cwd())
+  const installResult = await runCommandStep(install, process.cwd())
   const installArtifact = await writeArtifact(runDir, 'install-result', installResult, CommandResultSchema)
   const installSemanticKey = computeSemanticKey(install, {})
   const installDefinitionKey = computeDefinitionKey(install)
@@ -78,7 +78,7 @@ async function setUpInterruptedRun(dir: string): Promise<{
     artifact: installResult,
   })
 
-  const lintResult = runCommandStep(lint, process.cwd())
+  const lintResult = await runCommandStep(lint, process.cwd())
   const lintArtifact = await writeArtifact(runDir, 'lint-result', lintResult, CommandResultSchema)
   const lintSemanticKey = computeSemanticKey(lint, { 'install-result': installArtifact.hash })
   const lintDefinitionKey = computeDefinitionKey(lint)

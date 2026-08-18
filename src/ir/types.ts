@@ -36,6 +36,7 @@ export interface CommandStep extends BaseStep {
   cwd?: string
   failOn?: 'exitCode' | 'never'        // default 'exitCode' — see §9 #6
   capture?: ('stdout' | 'stderr' | 'exitCode')[]
+  idleTimeoutMs?: number               // default undefined (disabled) — time since last onLine, not total wall clock
 }
 
 export interface TransformStep extends BaseStep {
@@ -82,6 +83,7 @@ export interface StepFailure {
   reason:
     | 'needs-decision' | 'needs-context' | 'schema-invalid'
     | 'budget-exhausted' | 'tool-denied' | 'adapter-error' | 'command-failed'
+    | 'timeout'
   detail: string
   recoverable: boolean
 }
