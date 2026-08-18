@@ -16,6 +16,8 @@ export interface BaseStep {
   needs?: ArtifactName[]
   produces?: ArtifactName
   cache?: 'strict' | 'loose'          // default 'strict'
+  skipIf?: Expr                        // command/transform/agent: skip entirely, no artifact.
+                                        // gate: skip the pause, auto-answer from schema defaults.
 }
 
 export interface AgentStep extends BaseStep {
@@ -45,7 +47,6 @@ export interface GateStep extends BaseStep {
   kind: 'gate'
   schema: string
   render: { file: string } | { inline: string }
-  skipIf?: Expr
 }
 
 export interface MapStep extends BaseStep {
@@ -94,7 +95,7 @@ export type JournalEvent =
   | { t: 'step.started';     stepId: StepId; iteration?: number
                              semanticKey: string; definitionKey: string }
   | { t: 'step.completed';   stepId: StepId; iteration?: number; artifact?: ArtifactName
-                             artifactHash?: string; cached: boolean; stale?: boolean }
+                             artifactHash?: string; cached: boolean; stale?: boolean; skipped?: boolean }
   | { t: 'step.failed';      stepId: StepId; iteration?: number; failure: StepFailure }
   | { t: 'artifact.written'; name: ArtifactName; hash: string; bytes: number }
   | { t: 'budget.consumed';  stepId: StepId; tokens: number; usd?: number }

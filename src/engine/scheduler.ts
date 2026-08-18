@@ -5,6 +5,7 @@ import { ClaudeCodeAdapter } from '../adapters/claude-code.js'
 import { MockAdapter } from '../adapters/mock.js'
 import type { AgentAdapter } from '../adapters/types.js'
 import { agentInputNames, buildProducerMap, dependenciesOf, inputNamesOf } from '../ir/graph.js'
+import { evalExpr } from '../expr/eval.js'
 import type { AdapterId, ArtifactName, Step, StepId, Workflow } from '../ir/types.js'
 import { AgentStepFailedError, runAgentStep } from '../steps/agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from '../steps/command.js'
@@ -234,6 +235,27 @@ async function runStep(
     semanticKey,
     definitionKey,
   })
+
+  if (step.skipIf) {
+    const skipInputs: Record<string, unknown> = {}
+    for (const name of inputNamesOf(step)) {
+      skipInputs[name] = await readArtifactRaw(ctx.runDir, name)
+    }
+    const skip = Boolean(await evalExpr(step.skipIf, skipInputs, ctx.cwd))
+    if (skip) {
+      // Generalized from the gate-only skipIf (M4 ticket 05): command/
+      // transform/agent steps skip outright — no artifact, no cache write.
+      // A downstream step that `needs` this one's `produces` simply never
+      // becomes eligible, same as any other step that never ran.
+      await appendJournalEvent(ctx.runDir, ctx.runId, {
+        t: 'step.completed',
+        stepId: step.id,
+        cached: false,
+        skipped: true,
+      })
+      return 'ok'
+    }
+  }
 
   const cacheMode = step.cache ?? 'strict'
   const existingEntry = await readCacheEntry(ctx.cacheDir, semanticKey)

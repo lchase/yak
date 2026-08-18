@@ -1,0 +1,14 @@
+name: command-skip
+version: "1"
+steps:
+  - id: decide
+    gate:
+      schema: ApprovalSchema
+      render: { inline: "Release?" }
+    produces: decision
+
+  - id: release
+    needs: [decision]
+    skipIf: "decision.decision != 'approve'"
+    command: { run: "echo released" }
+    produces: release-result

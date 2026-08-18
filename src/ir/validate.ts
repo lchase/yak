@@ -209,7 +209,7 @@ function checkExitCodeReads(steps: Step[], producerOf: Map<ArtifactName, StepId>
 
 function exprsIn(step: Step): Expr[] {
   const exprs: Expr[] = []
-  if (step.kind === 'gate' && step.skipIf) exprs.push(step.skipIf)
+  if (step.skipIf) exprs.push(step.skipIf)
   if (step.kind === 'loop') {
     exprs.push(step.until)
     if (step.budget.noProgress) exprs.push(step.budget.noProgress.signal)

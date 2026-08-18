@@ -32,7 +32,6 @@ const rawExprSchema: z.ZodType<Expr> = z.union([z.string(), z.object({ fn: z.str
 const rawGateSchema = z.object({
   schema: z.string(),
   render: z.union([z.object({ file: z.string() }), z.object({ inline: z.string() })]),
-  skipIf: rawExprSchema.optional(),
 })
 
 const rawBudgetSchema: z.ZodType<Budget> = z.object({
@@ -47,6 +46,7 @@ interface RawStep {
   needs?: string[]
   produces?: string
   cache?: 'strict' | 'loose'
+  skipIf?: Expr                        // BaseStep-level: applies to command/transform/agent/gate.
   command?: z.infer<typeof rawCommandSchema>
   transform?: z.infer<typeof rawTransformSchema>
   agent?: z.infer<typeof rawAgentSchema>
@@ -75,6 +75,7 @@ const rawStepSchema: z.ZodType<RawStep> = z.lazy(() =>
     needs: z.array(z.string()).optional(),
     produces: z.string().optional(),
     cache: z.enum(['strict', 'loose']).optional(),
+    skipIf: rawExprSchema.optional(),
     command: rawCommandSchema.optional(),
     transform: rawTransformSchema.optional(),
     agent: rawAgentSchema.optional(),
@@ -119,6 +120,7 @@ function normalizeStep(raw: RawStep): Step {
       capture: raw.command.capture ?? ['stdout', 'stderr', 'exitCode'],
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
       ...(raw.command.cwd !== undefined ? { cwd: raw.command.cwd } : {}),
+      ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
     }
     return step
   }
@@ -131,6 +133,7 @@ function normalizeStep(raw: RawStep): Step {
       kind: 'transform',
       fn: raw.transform.fn,
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
+      ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
     }
     return step
   }
@@ -148,6 +151,7 @@ function normalizeStep(raw: RawStep): Step {
       ...(raw.agent.model !== undefined ? { model: raw.agent.model } : {}),
       ...(raw.agent.repairAttempts !== undefined ? { repairAttempts: raw.agent.repairAttempts } : {}),
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
+      ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
     }
     return step
   }
@@ -160,7 +164,7 @@ function normalizeStep(raw: RawStep): Step {
       kind: 'gate',
       schema: raw.gate.schema,
       render: raw.gate.render,
-      ...(raw.gate.skipIf !== undefined ? { skipIf: raw.gate.skipIf } : {}),
+      ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
     }
     return step
