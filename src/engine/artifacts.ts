@@ -1,7 +1,19 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z, type ZodType } from 'zod'
 import { sha256 } from '../util/hash.js'
+
+/** Same pattern as `cache.ts`'s `writeCacheEntry` — write to a per-write
+ * temp file in the target directory, then `rename` into place. `rename`
+ * within the same filesystem is atomic, so a crash or a concurrent
+ * reader never observes a torn/partial write — see the roadmap map's
+ * concurrency-safety audit (ticket 06). */
+async function writeFileAtomic(finalPath: string, content: string): Promise<void> {
+  const tmpPath = path.join(path.dirname(finalPath), `.${path.basename(finalPath)}.${randomUUID()}.tmp`)
+  await writeFile(tmpPath, content, 'utf8')
+  await rename(tmpPath, finalPath)
+}
 
 export interface WrittenArtifact {
   name: string
@@ -32,7 +44,7 @@ export async function writeArtifact<T>(
   const json = JSON.stringify(parsed, null, 2)
   await mkdir(path.join(runDir, 'artifacts'), { recursive: true })
   const filePath = artifactPath(runDir, name, iteration)
-  await writeFile(filePath, json, 'utf8')
+  await writeFileAtomic(filePath, json)
   return { name, hash: sha256(json), bytes: Buffer.byteLength(json), path: filePath }
 }
 
@@ -78,6 +90,6 @@ export async function writeRejectedOutput(
   const dir = path.join(runDir, 'artifacts', '.rejected')
   await mkdir(dir, { recursive: true })
   const filePath = path.join(dir, `${stepId}.${attempt}.txt`)
-  await writeFile(filePath, content, 'utf8')
+  await writeFileAtomic(filePath, content)
   return filePath
 }
