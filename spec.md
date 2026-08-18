@@ -487,12 +487,13 @@ export default workflow('fix-defect', {
            produces: 'pr-decision', schema: ApprovalSchema }),
 
     command({ id: 'open-pr', needs: ['pr-decision'], produces: 'pr-url',
+              skipIf: ({ 'pr-decision': d }) => d.decision !== 'approve',
               run: 'gh pr create --fill' }),
   ],
 })
 ```
 
-Note what this buys you over the same thing as a skill: the loop cannot exceed 5 iterations, the reviewers never pollute the implementer's context, `confirm-scope` self-skips when triage is confident, and if you close your laptop during the review fan-out, `yak resume` picks up without redoing the implementation.
+Note what this buys you over the same thing as a skill: the loop cannot exceed 5 iterations, the reviewers never pollute the implementer's context, `confirm-scope` self-skips when triage is confident, `open-pr` never fires unless the human actually approved, and if you close your laptop during the review fan-out, `yak resume` picks up without redoing the implementation.
 
 ---
 
@@ -540,6 +541,8 @@ Realistic sizing: M0–M2 is a long weekend if you're fluent in the ecosystem. M
     **Design goal this unlocks: gates should be demotable.** Once a gate has enough labeled examples, write a check step that predicts the verdict, run it in shadow mode beside the real gate, and promote it to `skipIf` when agreement holds. This is the mechanism by which a workflow becomes progressively more hands-free instead of permanently needing a human at the same six points.
 
 11. **Workflow discovery:** `.yak/workflows/` in-repo, `~/.yak/workflows/` for personal. **Repo wins on name collision.**
+
+12. **`skipIf` lives on `BaseStep`, not just `gate`.** Surfaced by the yak cookbook map's human-gated-release pattern (`.scratch/yak-cookbook/issues/05-pattern-gate-release.md`): nothing let a downstream step conditionally not-run off a prior gate's answer — this very reference workflow's `open-pr` step had exactly that gap until §7 was updated to match. `command`/`transform`/`agent` steps now skip outright (no artifact, no cache write) when the expression is true; `gate` keeps its original skip-the-pause-and-auto-answer behavior unchanged.
 
 ### Naming
 
@@ -656,6 +659,9 @@ export interface BaseStep {
   needs?: ArtifactName[]
   produces?: ArtifactName
   cache?: 'strict' | 'loose'          // default 'strict'
+  skipIf?: Expr                        // command/transform/agent: skip entirely, no
+                                        // artifact, no cache write. gate: skip the
+                                        // pause, auto-answer from schema defaults.
 }
 
 export interface AgentStep extends BaseStep {
@@ -685,7 +691,6 @@ export interface GateStep extends BaseStep {
   kind: 'gate'
   schema: string
   render: { file: string } | { inline: string }
-  skipIf?: Expr
 }
 
 export interface MapStep extends BaseStep {
@@ -730,18 +735,22 @@ export interface StepFailure {
 
 ```ts
 export type JournalEvent =
-  | { t: 'run.started';      runId: string; workflow: string; inputHash: string }
+  | { t: 'run.started';      runId: string; workflow: string; inputHash: string; adapter: AdapterId
+                             isolation: RunIsolation }
   | { t: 'step.started';     stepId: StepId; iteration?: number
                              semanticKey: string; definitionKey: string }
-  | { t: 'step.completed';   stepId: StepId; artifact?: ArtifactName
-                             artifactHash?: string; cached: boolean; stale?: boolean }
-  | { t: 'step.failed';      stepId: StepId; failure: StepFailure }
+  | { t: 'step.completed';   stepId: StepId; iteration?: number; artifact?: ArtifactName
+                             artifactHash?: string; cached: boolean; stale?: boolean; skipped?: boolean }
+  | { t: 'step.failed';      stepId: StepId; iteration?: number; failure: StepFailure }
   | { t: 'artifact.written'; name: ArtifactName; hash: string; bytes: number }
   | { t: 'budget.consumed';  stepId: StepId; tokens: number; usd?: number }
   | { t: 'loop.iteration';   stepId: StepId; n: number; signal?: unknown }
+  | { t: 'map.item.retried'; mapStepId: StepId; itemIndex: number; attempt: number; error: string }
   | { t: 'gate.opened';      stepId: StepId; requestPath: string }
-  | { t: 'gate.answered';    stepId: StepId }
-  | { t: 'run.suspended';    reason: 'gate' | 'budget' | 'exhausted' }
+  | { t: 'gate.answered';    stepId: StepId; skipped?: boolean }
+  | { t: 'run.suspended';    reason: 'gate' | 'budget' | 'exhausted'
+                             loopStepId?: StepId; iteration?: number
+                             tripped?: 'maxIterations' | 'maxTokens' | 'noProgress' }
   | { t: 'run.finished';     status: 'ok' | 'failed' | 'suspended' }
 
 // every event also carries: { at: string /* ISO */, runId: string }
