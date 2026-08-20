@@ -28,6 +28,8 @@ export interface AgentStep extends BaseStep {
   tools?: string[]
   model?: string
   repairAttempts?: number              // default 2
+  sandbox?: 'docker' | 'none'          // default 'none' — see ticket 07/08, roadmap map
+  image?: string                       // overrides the yak-shipped default agent-sandbox image
 }
 
 export interface CommandStep extends BaseStep {

@@ -5,11 +5,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { AgentStepFailedError } from '../../src/steps/agent.js'
 import type { AgentAdapterRequest } from '../../src/adapters/types.js'
+import { dockerAgentRunArgs } from '../../src/adapters/claude-code.js'
 
 const queryMock = vi.fn<(params: { prompt: string; options?: Options }) => Query>()
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (params: { prompt: string; options?: Options }) => queryMock(params),
+}))
+
+const teardownMock = vi.fn(async () => {})
+const createAgentSandboxNetworkMock = vi.fn(async (stepId: string) => ({
+  networkName: `net-${stepId}`,
+  proxyUrl: 'http://net-proxy:3128',
+  teardown: teardownMock,
+}))
+
+vi.mock('../../src/adapters/sandbox-network.js', () => ({
+  createAgentSandboxNetwork: (stepId: string) => createAgentSandboxNetworkMock(stepId),
 }))
 
 /** Minimal `Query`: an async generator over the given messages, plus the
@@ -76,6 +88,8 @@ let runDir: string
 beforeEach(async () => {
   runDir = await mkdtemp(path.join(tmpdir(), 'yak-claude-code-'))
   queryMock.mockReset()
+  createAgentSandboxNetworkMock.mockClear()
+  teardownMock.mockClear()
 })
 
 afterEach(async () => {
@@ -253,5 +267,98 @@ describe('ClaudeCodeAdapter', () => {
 
     await expect(adapter.run(baseReq)).rejects.toThrow('spawn failed')
     await expect(adapter.run(baseReq)).rejects.not.toBeInstanceOf(AgentStepFailedError)
+  })
+
+  describe('sandbox: docker (ticket 07/08)', () => {
+    it('sets up a sandbox network and passes spawnClaudeCodeProcess when sandbox is given', async () => {
+      const { ClaudeCodeAdapter } = await import('../../src/adapters/claude-code.js')
+      queryMock.mockReturnValue(fakeQuery([resultSuccess()]))
+
+      const adapter = new ClaudeCodeAdapter(runDir, 'code', {})
+      await adapter.run(baseReq)
+
+      expect(createAgentSandboxNetworkMock).toHaveBeenCalledWith('code')
+      const call = queryMock.mock.calls[0]![0]
+      expect(call.options?.spawnClaudeCodeProcess).toBeTypeOf('function')
+    })
+
+    it('does not set up a sandbox network when sandbox is omitted', async () => {
+      const { ClaudeCodeAdapter } = await import('../../src/adapters/claude-code.js')
+      queryMock.mockReturnValue(fakeQuery([resultSuccess()]))
+
+      const adapter = new ClaudeCodeAdapter(runDir, 'code')
+      await adapter.run(baseReq)
+
+      expect(createAgentSandboxNetworkMock).not.toHaveBeenCalled()
+      const call = queryMock.mock.calls[0]![0]
+      expect(call.options?.spawnClaudeCodeProcess).toBeUndefined()
+    })
+
+    it('tears down the sandbox network even when the query throws', async () => {
+      const { ClaudeCodeAdapter } = await import('../../src/adapters/claude-code.js')
+      queryMock.mockImplementation(() => {
+        throw new Error('boom')
+      })
+
+      const adapter = new ClaudeCodeAdapter(runDir, 'code', {})
+      await expect(adapter.run(baseReq)).rejects.toThrow('boom')
+
+      expect(teardownMock).toHaveBeenCalledTimes(1)
+    })
+  })
+})
+
+describe('dockerAgentRunArgs', () => {
+  const args = (
+    image: string | undefined,
+    hostEnv: NodeJS.ProcessEnv = {},
+    extraArgs: string[] = ['--print', 'hi'],
+  ) => dockerAgentRunArgs(image, '/work', 'net1', 'http://net1-proxy:3128', extraArgs, hostEnv)
+
+  it('binds the worktree to /workspace, sets it as the working dir, and forwards CLI args', () => {
+    expect(args(undefined)).toEqual([
+      'run',
+      '--rm',
+      '-i',
+      '--network',
+      'net1',
+      '-v',
+      '/work:/workspace',
+      '-w',
+      '/workspace',
+      '-e',
+      'HTTPS_PROXY=http://net1-proxy:3128',
+      '-e',
+      'HTTP_PROXY=http://net1-proxy:3128',
+      'yak-agent-sandbox:latest',
+      '/app/claude-cli',
+      '--print',
+      'hi',
+    ])
+  })
+
+  it('uses the overriding image when given, instead of the yak-shipped default', () => {
+    const result = args('my-org/agent-image:1.0')
+    expect(result).toContain('my-org/agent-image:1.0')
+    expect(result).not.toContain('yak-agent-sandbox:latest')
+  })
+
+  it('passes ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN through when set on the host', () => {
+    const result = args(undefined, { ANTHROPIC_API_KEY: 'sk-abc', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-xyz' })
+    expect(result).toEqual(
+      expect.arrayContaining(['-e', 'ANTHROPIC_API_KEY=sk-abc', '-e', 'CLAUDE_CODE_OAUTH_TOKEN=oauth-xyz']),
+    )
+  })
+
+  it('omits credential env vars entirely when neither is set on the host', () => {
+    const result = args(undefined, {})
+    expect(result.some((a) => a.startsWith('ANTHROPIC_API_KEY=') || a.startsWith('CLAUDE_CODE_OAUTH_TOKEN='))).toBe(
+      false,
+    )
+  })
+
+  it('does not mount ~/.claude or any host config directory', () => {
+    const result = args(undefined)
+    expect(result.some((a) => a.includes('.claude'))).toBe(false)
   })
 })

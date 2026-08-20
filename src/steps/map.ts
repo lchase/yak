@@ -12,7 +12,7 @@ import {
 } from '../engine/cache.js'
 import { appendJournalEvent } from '../engine/journal.js'
 import { inputNamesOf } from '../ir/graph.js'
-import type { ArtifactName, MapStep, StepId } from '../ir/types.js'
+import type { AgentStep, ArtifactName, MapStep } from '../ir/types.js'
 import { commitAllIfDirty, createWorktree, WorktreeCreationError } from '../util/git.js'
 import { AgentStepFailedError, runAgentStep } from './agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from './command.js'
@@ -31,7 +31,7 @@ export interface MapRunContext {
    * cap, never above it. */
   globalConcurrency: number
   outerArtifactHashes: Map<ArtifactName, string>
-  buildAdapter: (stepId: StepId, itemIndex: number) => AgentAdapter
+  buildAdapter: (step: AgentStep, itemIndex: number) => AgentAdapter
 }
 
 /** Ticket 05: fixed at 2, hardcoded — no `MapStep` config field in M3. */
@@ -244,7 +244,7 @@ async function runOneItemAttempt(
       } else if (itemStep.kind === 'transform') {
         result = await runTransformStep(itemStep, inputs, itemCwd)
       } else if (itemStep.kind === 'agent') {
-        const adapter = ctx.buildAdapter(itemStep.id, index)
+        const adapter = ctx.buildAdapter(itemStep, index)
         result = await runAgentStep(itemStep, inputs, { runId: ctx.runId, runDir: ctx.runDir, cwd: itemCwd, adapter })
       } else {
         throw new Error(`step "${itemStep.id}": kind "${itemStep.kind}" not supported as a map item step in M3`)

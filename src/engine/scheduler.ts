@@ -6,7 +6,7 @@ import { MockAdapter } from '../adapters/mock.js'
 import type { AgentAdapter } from '../adapters/types.js'
 import { agentInputNames, buildProducerMap, dependenciesOf, inputNamesOf } from '../ir/graph.js'
 import { evalExpr } from '../expr/eval.js'
-import type { AdapterId, ArtifactName, Step, StepId, Workflow } from '../ir/types.js'
+import type { AdapterId, AgentStep, ArtifactName, Step, StepId, Workflow } from '../ir/types.js'
 import { AgentStepFailedError, runAgentStep } from '../steps/agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from '../steps/command.js'
 import { runGateStep } from '../steps/gate.js'
@@ -48,14 +48,22 @@ function buildAdapter(
   adapterId: AdapterId,
   ctx: ScheduleContext,
   workflowName: string,
-  stepId: StepId,
+  step: AgentStep,
   iteration?: number,
 ): AgentAdapter {
   if (adapterId === 'mock') {
     const fixturesDir = path.join(ctx.cwd, 'test', 'fixtures')
-    return new MockAdapter(fixturesDir, workflowName, stepId, iteration)
+    return new MockAdapter(fixturesDir, workflowName, step.id, iteration)
   }
-  return new ClaudeCodeAdapter(ctx.runDir, stepId)
+  // Ticket 07/08 (roadmap map): `image` is passed through even when
+  // `undefined` — `ClaudeCodeAdapter`'s docker path falls back to the
+  // yak-shipped default image in that case, but the *presence* of the
+  // `{ image }` object (vs. `undefined`) is what turns containment on.
+  return new ClaudeCodeAdapter(
+    ctx.runDir,
+    step.id,
+    step.sandbox === 'docker' ? { image: step.image } : undefined,
+  )
 }
 
 function collectInputHashes(
@@ -195,7 +203,7 @@ async function runStep(
       semanticKey,
       definitionKey,
       outerArtifactHashes: artifactHashes,
-      buildAdapter: (stepId, iteration) => buildAdapter(ctx.adapter, ctx, workflowName, stepId, iteration),
+      buildAdapter: (step, iteration) => buildAdapter(ctx.adapter, ctx, workflowName, step, iteration),
       loopContinuation: ctx.loopContinuations?.get(step.id),
     })
   }
@@ -220,7 +228,7 @@ async function runStep(
       definitionKey,
       globalConcurrency: ctx.concurrency ?? DEFAULT_CONCURRENCY,
       outerArtifactHashes: artifactHashes,
-      buildAdapter: (stepId, itemIndex) => buildAdapter(ctx.adapter, ctx, workflowName, stepId, itemIndex),
+      buildAdapter: (step, itemIndex) => buildAdapter(ctx.adapter, ctx, workflowName, step, itemIndex),
     })
   }
 
@@ -299,7 +307,7 @@ async function runStep(
         typeof step.context === 'object' && 'session' in step.context
           ? agentSessionIds.get(step.context.session)
           : undefined
-      const adapter = buildAdapter(ctx.adapter, ctx, workflowName, step.id)
+      const adapter = buildAdapter(ctx.adapter, ctx, workflowName, step)
       result = await runAgentStep(
         step,
         inputs,

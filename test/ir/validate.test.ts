@@ -361,5 +361,23 @@ describe('validateWorkflow', () => {
         process.env.PATH = originalPath
       }
     })
+
+    // Ticket 07/08: unlike `command`, an `agent` step's `image` is optional
+    // (yak ships a default) — only the docker-on-PATH check applies.
+    it('accepts an agent step with sandbox: docker and no image, when docker is on PATH', async () => {
+      const wf = workflow([agent({ id: 'a', sandbox: 'docker' })])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
+
+    it('rejects sandbox: docker on an agent step when the docker binary is not on PATH', async () => {
+      const wf = workflow([agent({ id: 'a', sandbox: 'docker' })])
+      const originalPath = process.env.PATH
+      process.env.PATH = ''
+      try {
+        await expect(validateWorkflow(wf)).rejects.toThrow(/"docker" binary was not found on PATH/)
+      } finally {
+        process.env.PATH = originalPath
+      }
+    })
   })
 })

@@ -1,9 +1,66 @@
+import { spawn } from 'node:child_process'
 import { mkdir, appendFile } from 'node:fs/promises'
 import path from 'node:path'
-import { query, type Options, type SDKMessage, type SDKResultError } from '@anthropic-ai/claude-agent-sdk'
+import {
+  query,
+  type Options,
+  type SDKMessage,
+  type SDKResultError,
+  type SpawnedProcess,
+  type SpawnOptions as SdkSpawnOptions,
+} from '@anthropic-ai/claude-agent-sdk'
 import type { StepFailure } from '../ir/types.js'
 import { AgentStepFailedError } from '../steps/agent.js'
+import { createAgentSandboxNetwork, type AgentSandboxNetwork } from './sandbox-network.js'
 import type { AgentAdapter, AgentAdapterRequest, AgentAdapterResponse } from './types.js'
+
+/** Ticket 07/08 (roadmap map): `docker/agent-sandbox/`'s default image
+ * pins the resolved-per-arch CLI binary to this fixed path at build time
+ * (see that Dockerfile's comment) — the SDK's own `options.command` is a
+ * *host* path (wrong platform, meaningless inside a container), so it's
+ * never forwarded; only `options.args` (the portable CLI flags encoding
+ * the rest of `Options`) crosses the container boundary. */
+const AGENT_SANDBOX_IMAGE_DEFAULT = 'yak-agent-sandbox:latest'
+const CONTAINER_CLI_PATH = '/app/claude-cli'
+const CONTAINER_WORKDIR = '/workspace'
+
+/** Builds the `docker run` argv for a sandboxed agent step's CLI child
+ * process. Pure/exported for testing, same pattern as
+ * `command.ts`'s `dockerRunArgs`. Credentials cross via explicit env-var
+ * passthrough (ticket 07) — never a mounted `~/.claude`, which would hand
+ * the container broader host state than this one run's auth needs. */
+export function dockerAgentRunArgs(
+  image: string | undefined,
+  cwd: string,
+  networkName: string,
+  proxyUrl: string,
+  args: string[],
+  hostEnv: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const credentialEnv = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']
+    .filter((key) => hostEnv[key] !== undefined)
+    .flatMap((key) => ['-e', `${key}=${hostEnv[key]}`])
+
+  return [
+    'run',
+    '--rm',
+    '-i',
+    '--network',
+    networkName,
+    '-v',
+    `${cwd}:${CONTAINER_WORKDIR}`,
+    '-w',
+    CONTAINER_WORKDIR,
+    '-e',
+    `HTTPS_PROXY=${proxyUrl}`,
+    '-e',
+    `HTTP_PROXY=${proxyUrl}`,
+    ...credentialEnv,
+    image ?? AGENT_SANDBOX_IMAGE_DEFAULT,
+    CONTAINER_CLI_PATH,
+    ...args,
+  ]
+}
 
 /**
  * M2 tickets 01/10: `tools` is the SDK's availability allowlist (not the
@@ -69,12 +126,20 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   constructor(
     private readonly runDir: string,
     private readonly stepId: string,
+    /** Set (non-`undefined`) when `AgentStep.sandbox === 'docker'`; `image`
+     * is `undefined` for the yak-shipped default. See ticket 07/08. */
+    private readonly sandbox?: { image?: string },
   ) {}
 
   async run(req: AgentAdapterRequest): Promise<AgentAdapterResponse> {
     const abortController = new AbortController()
     if (req.signal.aborted) abortController.abort(req.signal.reason)
     else req.signal.addEventListener('abort', () => abortController.abort(req.signal.reason))
+
+    let network: AgentSandboxNetwork | undefined
+    if (this.sandbox) {
+      network = await createAgentSandboxNetwork(this.stepId)
+    }
 
     const options: Options = {
       ...FIXED_OPTIONS,
@@ -92,53 +157,77 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       ...(req.schema !== undefined
         ? { outputFormat: { type: 'json_schema', schema: req.schema as Record<string, unknown> } }
         : {}),
+      // Ticket 07/08: substitutes a `docker run` wrapping the CLI child
+      // process for the SDK's default local spawn. `spawnOptions.command`
+      // (a host path) is deliberately dropped — see dockerAgentRunArgs's
+      // doc comment — only `.args` (portable CLI flags) crosses over.
+      ...(network
+        ? {
+            spawnClaudeCodeProcess: (spawnOptions: SdkSpawnOptions): SpawnedProcess =>
+              spawn(
+                'docker',
+                dockerAgentRunArgs(
+                  this.sandbox!.image,
+                  req.cwd,
+                  network!.networkName,
+                  network!.proxyUrl,
+                  spawnOptions.args,
+                ),
+                { signal: spawnOptions.signal },
+              ),
+          }
+        : {}),
     }
 
-    const sessionLogPath = path.join(this.runDir, 'sessions', `${this.stepId}.jsonl`)
-    await mkdir(path.dirname(sessionLogPath), { recursive: true })
+    try {
+      const sessionLogPath = path.join(this.runDir, 'sessions', `${this.stepId}.jsonl`)
+      await mkdir(path.dirname(sessionLogPath), { recursive: true })
 
-    const filesChanged = new Set<string>()
-    let result: Extract<SDKMessage, { type: 'result' }> | undefined
+      const filesChanged = new Set<string>()
+      let result: Extract<SDKMessage, { type: 'result' }> | undefined
 
-    // Ticket 03: write the raw SDKMessage stream verbatim, one JSON object
-    // per line, unfiltered — already JSONL-shaped, matches the SDK's own
-    // on-disk session format.
-    for await (const message of query({ prompt: req.prompt, options })) {
-      await appendFile(sessionLogPath, `${JSON.stringify(message)}\n`, 'utf8')
-      collectFilesChanged(message, filesChanged)
-      if (message.type === 'result') result = message
-    }
+      // Ticket 03: write the raw SDKMessage stream verbatim, one JSON object
+      // per line, unfiltered — already JSONL-shaped, matches the SDK's own
+      // on-disk session format.
+      for await (const message of query({ prompt: req.prompt, options })) {
+        await appendFile(sessionLogPath, `${JSON.stringify(message)}\n`, 'utf8')
+        collectFilesChanged(message, filesChanged)
+        if (message.type === 'result') result = message
+      }
 
-    if (!result) {
-      // Ticket 04: a thrown/rejected promise around the `for await` loop is
-      // one failure mode; a stream that ends with no result message at all
-      // (still possible if the process exits without yielding one) is the
-      // same class of failure — treated identically.
-      throw new AgentStepFailedError({
-        reason: 'adapter-error',
-        detail: `claude-code adapter for step "${this.stepId}": query() stream ended without a result message`,
-        recoverable: true,
-      })
-    }
+      if (!result) {
+        // Ticket 04: a thrown/rejected promise around the `for await` loop is
+        // one failure mode; a stream that ends with no result message at all
+        // (still possible if the process exits without yielding one) is the
+        // same class of failure — treated identically.
+        throw new AgentStepFailedError({
+          reason: 'adapter-error',
+          detail: `claude-code adapter for step "${this.stepId}": query() stream ended without a result message`,
+          recoverable: true,
+        })
+      }
 
-    if (result.permission_denials.length > 0) {
-      throw new AgentStepFailedError({
-        reason: 'tool-denied',
-        detail: `tool call(s) denied: ${result.permission_denials.map((d) => d.tool_name).join(', ')}`,
-        recoverable: false,
-      })
-    }
+      if (result.permission_denials.length > 0) {
+        throw new AgentStepFailedError({
+          reason: 'tool-denied',
+          detail: `tool call(s) denied: ${result.permission_denials.map((d) => d.tool_name).join(', ')}`,
+          recoverable: false,
+        })
+      }
 
-    if (result.subtype !== 'success') {
-      throw new AgentStepFailedError(mapResultError(result))
-    }
+      if (result.subtype !== 'success') {
+        throw new AgentStepFailedError(mapResultError(result))
+      }
 
-    return {
-      output: result.structured_output ?? result.result,
-      sessionId: result.session_id,
-      tokens: { input: result.usage.input_tokens, output: result.usage.output_tokens },
-      filesChanged: [...filesChanged].sort(),
-      stopReason: 'complete',
+      return {
+        output: result.structured_output ?? result.result,
+        sessionId: result.session_id,
+        tokens: { input: result.usage.input_tokens, output: result.usage.output_tokens },
+        filesChanged: [...filesChanged].sort(),
+        stopReason: 'complete',
+      }
+    } finally {
+      await network?.teardown()
     }
   }
 }

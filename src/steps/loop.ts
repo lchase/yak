@@ -12,7 +12,7 @@ import { appendJournalEvent, readJournal } from '../engine/journal.js'
 import { writeLoopExhaustedRequest } from '../engine/suspend.js'
 import { evalExpr } from '../expr/eval.js'
 import { buildProducerMap, inputNamesOf } from '../ir/graph.js'
-import type { ArtifactName, LoopStep, Step, StepId } from '../ir/types.js'
+import type { AgentStep, ArtifactName, LoopStep, Step, StepId } from '../ir/types.js'
 import { AgentStepFailedError, runAgentStep } from './agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from './command.js'
 import { runTransformStep } from './transform.js'
@@ -32,7 +32,7 @@ export interface LoopRunContext {
    * their flat (non-iteration) path — an external need's contribution to a
    * body step's cache key. */
   outerArtifactHashes: Map<ArtifactName, string>
-  buildAdapter: (stepId: StepId, iteration: number) => AgentAdapter
+  buildAdapter: (step: AgentStep, iteration: number) => AgentAdapter
   /** M4 ticket 02/06: set by the scheduler from `ScheduleContext.loopContinuations`
    * when `yak resume` just validated a human's answer to this loop's
    * exhaustion request. Consumed once, at the top of `runLoopStep`. */
@@ -401,7 +401,7 @@ async function runBodyStepKind(
     if (bodyStep.kind === 'command') return await runCommandStep(bodyStep, ctx.cwd)
     if (bodyStep.kind === 'transform') return await runTransformStep(bodyStep, inputs, ctx.cwd)
     if (bodyStep.kind === 'agent') {
-      const adapter = ctx.buildAdapter(bodyStep.id, iteration)
+      const adapter = ctx.buildAdapter(bodyStep, iteration)
       return await runAgentStep(bodyStep, inputs, { runId: ctx.runId, runDir: ctx.runDir, cwd: ctx.cwd, adapter })
     }
   } catch (err) {

@@ -81,12 +81,17 @@ function checkSandboxImage(steps: Step[]): void {
 
 const execFileAsync = promisify(execFile)
 
-/** Ticket 04/05: fail the whole workflow before any run starts if
- * `docker` isn't on PATH but some step needs it — same "fail where the
- * workflow author can see it" reasoning as every other check in this
- * file, rather than discovering it mid-run on the first sandboxed step. */
+/** Ticket 04/05 (`command`) / 07/08 (`agent`): fail the whole workflow
+ * before any run starts if `docker` isn't on PATH but some step needs it —
+ * same "fail where the workflow author can see it" reasoning as every
+ * other check in this file, rather than discovering it mid-run on the
+ * first sandboxed step. Unlike `command`, an `agent` step's `image` is
+ * optional (ticket 07: yak ships a default), so only the `docker`-on-PATH
+ * check applies to it — no `checkSandboxImage`-style required-field check. */
 async function checkDockerAvailable(steps: Step[]): Promise<void> {
-  if (!steps.some((step) => step.kind === 'command' && step.sandbox === 'docker')) return
+  const needsDocker = (step: Step) =>
+    (step.kind === 'command' || step.kind === 'agent') && step.sandbox === 'docker'
+  if (!steps.some(needsDocker)) return
   try {
     await execFileAsync('docker', ['--version'])
   } catch {
