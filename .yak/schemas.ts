@@ -38,3 +38,14 @@ export const ReviewSchema = z.object({
 export const DraftSchema = z.object({
   sentence: z.string(),
 })
+
+// yak cookbook pattern: standalone transform
+// (fixtures/standalone-transform/workflow.yaml).
+export const TodoExtractSchema = z.object({
+  todos: z.array(
+    z.object({
+      task: z.string(),
+      priority: z.enum(['high', 'medium', 'low']),
+    }),
+  ),
+})

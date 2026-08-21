@@ -1,0 +1,18 @@
+name: standalone-transform
+version: "1"
+steps:
+  - id: extract
+    agent:
+      prompt:
+        inline: >
+          Extract every task from this text as a JSON array of
+          {task, priority}, priority one of high/medium/low: "Fix the
+          login bug, it's urgent. Update the docs. Refactor the cache
+          layer, low priority. Ship the release, high priority."
+      schema: TodoExtractSchema
+    produces: extracted
+
+  - id: summarize-todos
+    needs: [extracted]
+    transform: { fn: summarizeTodos }
+    produces: todoSummary

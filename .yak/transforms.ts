@@ -66,6 +66,22 @@ export function parseTestResult(inputs: Record<string, unknown>): unknown {
  * the point of this pattern is the fan-out mechanics (concurrency,
  * per-item worktree isolation, auto-commit-before-fork), not sourcing
  * the batch itself. */
+interface TodoExtract {
+  todos: { task: string; priority: 'high' | 'medium' | 'low' }[]
+}
+
+/** yak cookbook: standalone transform. Pure reshaping of the extractor
+ * agent's output into counts — no model call, no subprocess, just data
+ * massaging. This is the entire point of a `transform` step existing as
+ * its own kind rather than folding this into the agent's own schema or a
+ * `command` step shelling out to node. */
+export function summarizeTodos(inputs: Record<string, unknown>): unknown {
+  const { todos } = inputs['extracted'] as TodoExtract
+  const counts = { high: 0, medium: 0, low: 0 }
+  for (const todo of todos) counts[todo.priority] += 1
+  return { total: todos.length, byPriority: counts }
+}
+
 /** yak cookbook: map onItemFailure fail/retry. Static, deterministic —
  * item index 2 always fails its check (see the workflow's item `command`,
  * which branches on `$MAP_ITEM_INDEX`), the point is the failure-policy
