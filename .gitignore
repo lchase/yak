@@ -8,3 +8,4 @@ docs-site/.docusaurus/
 .yak/worktrees/
 *.log
 .DS_Store
+.env

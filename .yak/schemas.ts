@@ -32,3 +32,9 @@ export const ReviewSchema = z.object({
   approved: z.boolean(),
   feedback: z.string(),
 })
+
+// yak cookbook pattern: loop onExhausted fail/continue
+// (fixtures/loop-on-exhausted/workflow-*.yaml).
+export const DraftSchema = z.object({
+  sentence: z.string(),
+})
