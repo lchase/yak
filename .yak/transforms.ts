@@ -66,6 +66,14 @@ export function parseTestResult(inputs: Record<string, unknown>): unknown {
  * the point of this pattern is the fan-out mechanics (concurrency,
  * per-item worktree isolation, auto-commit-before-fork), not sourcing
  * the batch itself. */
+/** yak cookbook: map onItemFailure fail/retry. Static, deterministic —
+ * item index 2 always fails its check (see the workflow's item `command`,
+ * which branches on `$MAP_ITEM_INDEX`), the point is the failure-policy
+ * mechanics, not sourcing the batch. */
+export function batchChecks(): unknown {
+  return [{ id: 'check-a' }, { id: 'check-b' }, { id: 'check-c' }]
+}
+
 export function batchIssues(): unknown {
   return [
     {
