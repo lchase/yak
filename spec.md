@@ -624,7 +624,7 @@ yak/
 | --- | --- | --- |
 | Runtime | Node 22 LTS + `tsx` (dev), `tsup` (build) | Broadest install base for a CLI others will consume. Bun is faster and is what Archon uses — swap if you don't care about non-Bun users. |
 | YAML | `yaml` (eemeli) | Comment-preserving round-trip; you'll want that when a UI or agent edits workflows. |
-| Schemas | `zod` + `zod-to-json-schema` | Zod for artifact validation, JSON Schema for what the adapter sends to the model. |
+| Schemas | `zod` + `zod-to-json-schema` + `ajv` | Zod for named-ref (`.yak/schemas.ts`) artifact validation and JSON Schema generation for the adapter; `ajv` validates inline (`{ inline: JSONSchema }`) schemas directly — structural only, no coercion/transform. |
 | Expressions | `jexl` | Tiny, safe, no `eval`. Covers `test-result.exitCode == 0` and little else, which is the point. |
 | CLI | `commander` | Boring and ubiquitous. |
 | Concurrency | `p-limit` | One primitive, no scheduler framework. |
@@ -667,7 +667,10 @@ export interface BaseStep {
 export interface AgentStep extends BaseStep {
   kind: 'agent'
   prompt: { file: string } | { inline: string }
-  schema?: string                      // key in .yak/schemas.ts
+  schema?: string | { inline: JSONSchema }  // key in .yak/schemas.ts (Zod,
+                                             // full power), or an inline
+                                             // JSON Schema (ajv, structural
+                                             // only — no coercion/transform)
   context?: 'fresh' | { inherit: ArtifactName[] } | { session: StepId }
   tools?: string[]
   model?: string
@@ -689,7 +692,7 @@ export interface TransformStep extends BaseStep {
 
 export interface GateStep extends BaseStep {
   kind: 'gate'
-  schema: string
+  schema: string | { inline: JSONSchema }
   render: { file: string } | { inline: string }
 }
 

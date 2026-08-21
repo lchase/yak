@@ -1,13 +1,13 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { ZodType } from 'zod'
+import { z } from 'zod'
 import { writeArtifact } from '../engine/artifacts.js'
 import { appendJournalEvent } from '../engine/journal.js'
 import { writeGateRequest } from '../engine/suspend.js'
 import { renderTemplate } from '../expr/template.js'
 import { evalExpr } from '../expr/eval.js'
+import { resolveSchemaSpec } from '../ir/schema-resolve.js'
 import type { GateStep } from '../ir/types.js'
-import { resolveAgentSchema, toJsonSchema } from './agent.js'
 
 export interface GateRunContext {
   runId: string
@@ -33,8 +33,14 @@ export async function completeGate(
   let artifactHash: string | undefined
 
   if (step.produces) {
-    const schema = await resolveAgentSchema(step.schema, ctx.cwd)
-    const written = await writeArtifact(ctx.runDir, step.produces, schema.parse(answer), schema as ZodType)
+    const schema = await resolveSchemaSpec(step.schema, ctx.cwd)
+    const parsed = schema.safeParse(answer)
+    if (!parsed.success) {
+      throw new Error(`gate step "${step.id}": answer failed schema validation: ${parsed.errorSummary}`)
+    }
+    // Already validated above — z.unknown() avoids a redundant re-parse
+    // (and, for the Zod branch, a non-idempotent `.transform()` running twice).
+    const written = await writeArtifact(ctx.runDir, step.produces, parsed.data, z.unknown())
     artifactName = written.name
     artifactHash = written.hash
     await appendJournalEvent(ctx.runDir, ctx.runId, {
@@ -85,7 +91,7 @@ export async function runGateStep(
     definitionKey: '',
   })
 
-  const schema = await resolveAgentSchema(step.schema, ctx.cwd)
+  const schema = await resolveSchemaSpec(step.schema, ctx.cwd)
 
   const skip = step.skipIf ? Boolean(await evalExpr(step.skipIf, inputs, ctx.cwd)) : false
   if (skip) {
@@ -94,7 +100,13 @@ export async function runGateStep(
     // same shape as an answered one in the audit trail, just resolved
     // without a human. No pending request file: there's nothing to answer.
     await appendJournalEvent(ctx.runDir, ctx.runId, { t: 'gate.opened', stepId: step.id, requestPath: '' })
-    await completeGate(step, ctx, schema.parse({}), { skipped: true })
+    const defaulted = schema.parseDefaults()
+    if (!defaulted.success) {
+      throw new Error(
+        `gate step "${step.id}": skipIf true but schema doesn't default every field: ${defaulted.errorSummary}`,
+      )
+    }
+    await completeGate(step, ctx, defaulted.data, { skipped: true })
     return 'ok'
   }
 
@@ -103,7 +115,7 @@ export async function runGateStep(
   // adapter's structured-output schema — ticket 04's `--interactive`
   // renderer (and any other pending-request reader) expects a bare
   // object schema with `properties`/`required` at the top level.
-  const answerSchema = toJsonSchema(schema)
+  const answerSchema = schema.toJsonSchema()
   await writeGateRequest(ctx.runDir, ctx.runId, step, rendered, answerSchema)
   return 'suspended'
 }

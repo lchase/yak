@@ -18,9 +18,13 @@ const rawAgentContextSchema = z.union([
   z.object({ session: z.string() }),
 ])
 
+// AgentStep/GateStep.schema: a key in .yak/schemas.ts, or an inline JSON
+// Schema (roadmap map ticket 09 / M1 ticket 08).
+const rawSchemaSpecSchema = z.union([z.string(), z.object({ inline: z.record(z.unknown()) })])
+
 const rawAgentSchema = z.object({
   prompt: z.union([z.object({ file: z.string() }), z.object({ inline: z.string() })]),
-  schema: z.string().optional(),
+  schema: rawSchemaSpecSchema.optional(),
   context: rawAgentContextSchema.optional(),
   tools: z.array(z.string()).optional(),
   model: z.string().optional(),
@@ -30,7 +34,7 @@ const rawAgentSchema = z.object({
 const rawExprSchema: z.ZodType<Expr> = z.union([z.string(), z.object({ fn: z.string() })])
 
 const rawGateSchema = z.object({
-  schema: z.string(),
+  schema: rawSchemaSpecSchema,
   render: z.union([z.object({ file: z.string() }), z.object({ inline: z.string() })]),
 })
 

@@ -1,11 +1,10 @@
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { ZodBoolean, ZodDefault, ZodEnum, ZodNumber, ZodObject, ZodOptional, ZodString, ZodType } from 'zod'
 import { extractTemplateRoots } from '../expr/template.js'
 import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps } from './graph.js'
+import { describeSchemaSpec, resolveSchemaSpec, type SchemaSpec } from './schema-resolve.js'
 import type { ArtifactName, Expr, GateStep, RunIsolation, Step, StepId, Workflow } from './types.js'
 
 export class WorkflowValidationError extends Error {}
@@ -265,63 +264,49 @@ function exitCodeReferences(expr: Expr): ArtifactName[] {
   return matches.map((m) => m[1]!)
 }
 
-/** §13 `AgentStep.schema` is "a key in .yak/schemas.ts" — reject an unknown
- * key at load time rather than failing the first time the step runs. */
+/** §13 `AgentStep.schema` is "a key in .yak/schemas.ts", or (roadmap map
+ * ticket 09 / M1 ticket 08) an inline JSON Schema. Reject an unresolvable
+ * named ref or a malformed inline document at load time rather than
+ * failing the first time the step runs — `resolveSchemaSpec` throws for
+ * either case (missing export, or ajv rejecting the schema against its own
+ * meta-schema during `compile`). */
 async function checkAgentSchemaKeys(steps: Step[], cwd: string): Promise<void> {
   for (const step of steps) {
     if (step.kind !== 'agent' || !step.schema) continue
-
-    const modulePath = path.resolve(cwd, '.yak/schemas.ts')
-    let mod: Record<string, unknown>
-    try {
-      mod = await import(pathToFileURL(modulePath).href)
-    } catch (err) {
-      throw new WorkflowValidationError(
-        `step "${step.id}": could not load .yak/schemas.ts to resolve schema "${step.schema}": ` +
-          `${(err as Error).message}`,
-      )
-    }
-    if (!(mod[step.schema] instanceof ZodType)) {
-      throw new WorkflowValidationError(
-        `step "${step.id}": schema "${step.schema}" not found in .yak/schemas.ts`,
-      )
-    }
+    await checkSchemaSpecResolves(step.id, step.schema, cwd)
   }
 }
 
-/** §13 `GateStep.schema` is a key in `.yak/schemas.ts`, same resolver
- * convention as `AgentStep.schema` (`checkAgentSchemaKeys`). M4 ticket 05:
- * a gate with `skipIf` additionally requires every field on that schema to
- * carry a Zod `.default()` — `schema.safeParse({})` must succeed, since the
- * skip path parses `{}` through the schema to synthesize the artifact. */
+async function checkSchemaSpecResolves(stepId: StepId, spec: SchemaSpec, cwd: string): Promise<void> {
+  try {
+    await resolveSchemaSpec(spec, cwd)
+  } catch (err) {
+    throw new WorkflowValidationError(
+      `step "${stepId}": could not resolve schema ${describeSchemaSpec(spec)}: ${(err as Error).message}`,
+    )
+  }
+}
+
+/** §13 `GateStep.schema` is a key in `.yak/schemas.ts` or an inline JSON
+ * Schema, same resolver convention as `AgentStep.schema`
+ * (`checkAgentSchemaKeys`). M4 ticket 05: a gate with `skipIf` additionally
+ * requires every field on that schema to default — `schema.parseDefaults()`
+ * must succeed, since the skip path parses `{}` through the schema to
+ * synthesize the artifact. */
 async function checkGateSchemaKeys(steps: Step[], cwd: string): Promise<void> {
   for (const step of steps) {
     if (step.kind !== 'gate') continue
 
-    const modulePath = path.resolve(cwd, '.yak/schemas.ts')
-    let mod: Record<string, unknown>
-    try {
-      mod = await import(pathToFileURL(modulePath).href)
-    } catch (err) {
-      throw new WorkflowValidationError(
-        `step "${step.id}": could not load .yak/schemas.ts to resolve schema "${step.schema}": ` +
-          `${(err as Error).message}`,
-      )
-    }
-    const schema = mod[step.schema]
-    if (!(schema instanceof ZodType)) {
-      throw new WorkflowValidationError(
-        `step "${step.id}": schema "${step.schema}" not found in .yak/schemas.ts`,
-      )
-    }
+    await checkSchemaSpecResolves(step.id, step.schema, cwd)
+    const schema = await resolveSchemaSpec(step.schema, cwd)
 
     if (step.skipIf !== undefined) {
-      const defaulted = schema.safeParse({})
+      const defaulted = schema.parseDefaults()
       if (!defaulted.success) {
         throw new WorkflowValidationError(
-          `step "${step.id}": has skipIf but schema "${step.schema}" doesn't default every field ` +
-            `(parsing {} failed: ${defaulted.error.issues.map((i) => i.path.join('.')).join(', ')}) — ` +
-            `every field needs a Zod .default() so a skip can synthesize the answer artifact`,
+          `step "${step.id}": has skipIf but schema ${describeSchemaSpec(step.schema)} doesn't default ` +
+            `every field (parsing {} failed: ${defaulted.errorSummary}) — every field needs a default so ` +
+            `a skip can synthesize the answer artifact`,
         )
       }
     }
@@ -332,31 +317,18 @@ async function checkGateSchemaKeys(steps: Step[], cwd: string): Promise<void> {
 
 /** M4 ticket 04: `--interactive` only knows how to render a flat answer
  * schema — top-level object, each property a scalar (string/number/
- * boolean) or enum, optionally wrapped in `.optional()`/`.default()`.
- * Rejected here, at load time, rather than discovered mid-prompt at
- * runtime — same "fail where the workflow author can see it" reasoning as
- * every other schema check in this file. */
-function checkFlatAnswerSchema(step: GateStep, schema: ZodType): void {
-  if (!(schema instanceof ZodObject)) {
+ * boolean) or enum, optionally wrapped in `.optional()`/`.default()` (Zod
+ * branch) or absent from `required` (inline JSON Schema branch). Rejected
+ * here, at load time, rather than discovered mid-prompt at runtime — same
+ * "fail where the workflow author can see it" reasoning as every other
+ * schema check in this file. */
+function checkFlatAnswerSchema(step: GateStep, schema: { isFlatAnswerObject(): { ok: boolean; reason?: string } }): void {
+  const check = schema.isFlatAnswerObject()
+  if (!check.ok) {
     throw new WorkflowValidationError(
-      `step "${step.id}": schema "${step.schema}" must be a top-level object for --interactive to render`,
+      `step "${step.id}": schema ${describeSchemaSpec(step.schema)} ${check.reason} — --interactive can ` +
+        `only render string/number/boolean/enum properties`,
     )
-  }
-
-  for (const [field, fieldSchemaRaw] of Object.entries(schema.shape as Record<string, ZodType>)) {
-    let fieldSchema: ZodType = fieldSchemaRaw
-    while (fieldSchema instanceof ZodOptional || fieldSchema instanceof ZodDefault) {
-      fieldSchema = fieldSchema instanceof ZodOptional ? fieldSchema.unwrap() : fieldSchema._def.innerType
-    }
-    const isScalar =
-      fieldSchema instanceof ZodString || fieldSchema instanceof ZodNumber || fieldSchema instanceof ZodBoolean
-    if (!isScalar && !(fieldSchema instanceof ZodEnum)) {
-      throw new WorkflowValidationError(
-        `step "${step.id}": schema "${step.schema}" field "${field}" is not a flat scalar/enum type — ` +
-          `--interactive can only render string/number/boolean/enum properties, optionally wrapped in ` +
-          `.optional()/.default()`,
-      )
-    }
   }
 }
 

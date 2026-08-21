@@ -138,4 +138,77 @@ describe('agent step end to end (mock adapter)', () => {
     const rejected = await readFile(path.join(result.runDir, 'artifacts', '.rejected', 'plan.3.txt'), 'utf8')
     expect(JSON.parse(rejected)).toEqual({ wrong: 3 })
   })
+
+  it('roadmap ticket 09: validates against an inline JSON Schema (no .yak/schemas.ts entry needed)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'yak-agent-inline-'))
+    await writeFixture(dir, 'agent-inline', 'plan', [{ output: { summary: 'do the thing' } }])
+    const workflowPath = path.join(dir, 'workflow.yaml')
+    await writeFile(
+      workflowPath,
+      [
+        'name: agent-inline',
+        'version: "1"',
+        'steps:',
+        '  - id: plan',
+        '    agent:',
+        '      prompt: { inline: "plan it" }',
+        '      schema:',
+        '        inline:',
+        '          type: object',
+        '          properties:',
+        '            summary: { type: string }',
+        '          required: [summary]',
+        '    produces: plan',
+      ].join('\n'),
+      'utf8',
+    )
+
+    const result = await executeWorkflowFile(workflowPath, {
+      runsDir: path.join(dir, '.runs'),
+      cwd: dir,
+      adapter: 'mock',
+    })
+
+    expect(result.status).toBe('ok')
+    const artifact = JSON.parse(await readFile(path.join(result.runDir, 'artifacts', 'plan.json'), 'utf8'))
+    expect(artifact).toEqual({ summary: 'do the thing' })
+  })
+
+  it('roadmap ticket 09: repairs against an inline JSON Schema using ajv error formatting', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'yak-agent-inline-repair-'))
+    await writeFixture(dir, 'agent-inline-repair', 'plan', [
+      { output: { wrong: 1 } },
+      { output: { summary: 'fixed on retry' } },
+    ])
+    const workflowPath = path.join(dir, 'workflow.yaml')
+    await writeFile(
+      workflowPath,
+      [
+        'name: agent-inline-repair',
+        'version: "1"',
+        'steps:',
+        '  - id: plan',
+        '    agent:',
+        '      prompt: { inline: "plan it" }',
+        '      schema:',
+        '        inline:',
+        '          type: object',
+        '          properties:',
+        '            summary: { type: string }',
+        '          required: [summary]',
+        '    produces: plan',
+      ].join('\n'),
+      'utf8',
+    )
+
+    const result = await executeWorkflowFile(workflowPath, {
+      runsDir: path.join(dir, '.runs'),
+      cwd: dir,
+      adapter: 'mock',
+    })
+
+    expect(result.status).toBe('ok')
+    const artifact = JSON.parse(await readFile(path.join(result.runDir, 'artifacts', 'plan.json'), 'utf8'))
+    expect(artifact).toEqual({ summary: 'fixed on retry' })
+  })
 })

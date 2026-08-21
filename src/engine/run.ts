@@ -7,7 +7,7 @@ import { normalizeWorkflow } from '../ir/normalize.js'
 import type { AdapterId, RunIsolation, StepId, Workflow } from '../ir/types.js'
 import { validateWorkflow } from '../ir/validate.js'
 import { completeGate } from '../steps/gate.js'
-import { resolveAgentSchema } from '../steps/agent.js'
+import { resolveSchemaSpec } from '../ir/schema-resolve.js'
 import { createWorktree } from '../util/git.js'
 import { sha256 } from '../util/hash.js'
 import { appendJournalEvent, completedStepsFromJournal, readJournal } from './journal.js'
@@ -151,7 +151,7 @@ async function resolveOpenRequests(
     if (!step || step.kind !== 'gate') {
       throw new Error(`pending request for step "${request.stepId}" but no gate step with that id exists`)
     }
-    return resolveAgentSchema(step.schema, cwd)
+    return resolveSchemaSpec(step.schema, cwd)
   }
 
   const resolutions = await Promise.all(openIds.map((stepId) => resolveAnswer(runDir, stepId, gateAnswerSchema)))

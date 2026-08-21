@@ -211,6 +211,21 @@ describe('validateWorkflow', () => {
       const wf = workflow([agent({ id: 'plan', schema: 'Nope' })])
       await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/schema "Nope" not found/)
     })
+
+    it('roadmap ticket 09: accepts a well-formed inline JSON Schema', async () => {
+      const wf = workflow([
+        agent({
+          id: 'plan',
+          schema: { inline: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] } },
+        }),
+      ])
+      await expect(validateWorkflow(wf, cwd)).resolves.toBeUndefined()
+    })
+
+    it('roadmap ticket 09: rejects a malformed inline JSON Schema at load time', async () => {
+      const wf = workflow([agent({ id: 'plan', schema: { inline: { type: 'not-a-real-type' } } })])
+      await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/could not resolve schema inline schema/)
+    })
   })
 
   describe('M4: gate step schema keys, skipIf defaults, flat-schema, render placeholders', () => {
@@ -271,6 +286,45 @@ describe('validateWorkflow', () => {
     it('rejects a render placeholder not in needs', async () => {
       const wf = workflow([gate({ id: 'approve', schema: 'ApprovalSchema', render: { inline: '{{plan}}' } })])
       await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/"plan" is not in needs/)
+    })
+
+    it('roadmap ticket 09: accepts an inline JSON Schema with skipIf when every field defaults', async () => {
+      const wf = workflow([
+        gate({
+          id: 'approve',
+          schema: {
+            inline: {
+              type: 'object',
+              properties: { decision: { type: 'string', enum: ['approve', 'reject'], default: 'approve' } },
+            },
+          },
+          skipIf: 'true',
+        }),
+      ])
+      await expect(validateWorkflow(wf, cwd)).resolves.toBeUndefined()
+    })
+
+    it('roadmap ticket 09: rejects skipIf on an inline schema that does not default every field', async () => {
+      const wf = workflow([
+        gate({
+          id: 'approve',
+          schema: {
+            inline: { type: 'object', properties: { decision: { type: 'string', enum: ['approve', 'reject'] } }, required: ['decision'] },
+          },
+          skipIf: 'true',
+        }),
+      ])
+      await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/doesn't default every field/)
+    })
+
+    it('roadmap ticket 09: rejects a nested inline answer schema at load time', async () => {
+      const wf = workflow([
+        gate({
+          id: 'approve',
+          schema: { inline: { type: 'object', properties: { inner: { type: 'object', properties: { x: { type: 'string' } } } } } },
+        }),
+      ])
+      await expect(validateWorkflow(wf, cwd)).rejects.toThrow(/not a flat scalar\/enum type/)
     })
   })
 

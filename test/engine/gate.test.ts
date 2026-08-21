@@ -8,6 +8,7 @@ import { readPendingRequest } from '../../src/engine/suspend.js'
 
 const GATE_SUSPEND = path.join(process.cwd(), 'test', 'workflows', 'gate-suspend.yaml')
 const GATE_SKIP = path.join(process.cwd(), 'test', 'workflows', 'gate-skip.yaml')
+const GATE_SKIP_INLINE = path.join(process.cwd(), 'test', 'workflows', 'gate-skip-inline.yaml')
 const GATE_MULTI = path.join(process.cwd(), 'test', 'workflows', 'gate-multi.yaml')
 
 async function readArtifact(runDir: string, name: string): Promise<unknown> {
@@ -89,6 +90,17 @@ describe('gate step: skipIf (ticket 05)', () => {
     const answered = events.find((e) => e.t === 'gate.answered')
     expect(opened).toMatchObject({ stepId: 'approve' })
     expect(answered).toMatchObject({ stepId: 'approve', skipped: true })
+  })
+
+  it('roadmap ticket 09: auto-answers from an inline JSON Schema default (ajv useDefaults)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'yak-gate-inline-'))
+    const runsDir = path.join(dir, '.runs')
+
+    const result = await executeWorkflowFile(GATE_SKIP_INLINE, { runsDir })
+    expect(result.status).toBe('ok')
+
+    const decision = await readArtifact(result.runDir, 'decision')
+    expect(decision).toEqual({ decision: 'approve' })
   })
 })
 

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { z, type ZodError } from 'zod'
+import { z } from 'zod'
+import { wrapZodSchema, type ResolvedSchema } from '../ir/schema-resolve.js'
 import type { GateStep, JournalEnvelope, StepId } from '../ir/types.js'
 import { appendJournalEvent } from './journal.js'
 
@@ -137,10 +138,6 @@ export function openRequestStepIds(events: JournalEnvelope[]): StepId[] {
   return [...open.entries()].filter(([, isOpen]) => isOpen).map(([stepId]) => stepId)
 }
 
-export function formatZodError(error: ZodError): string {
-  return error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('\n')
-}
-
 export type AnswerResolution =
   | { status: 'missing'; stepId: StepId }
   | { status: 'invalid'; stepId: StepId; errors: string }
@@ -149,13 +146,14 @@ export type AnswerResolution =
 /**
  * M4 ticket 06: read+validate one step's answer file against the
  * appropriate schema (the fixed loop-exhaustion schema, or the caller-
- * resolved gate schema). Never writes anything — a `'missing'` or
- * `'invalid'` result means the caller leaves the run suspended untouched.
+ * resolved gate schema — either branch of `SchemaSpec`, roadmap map ticket
+ * 09). Never writes anything — a `'missing'` or `'invalid'` result means
+ * the caller leaves the run suspended untouched.
  */
 export async function resolveAnswer(
   runDir: string,
   stepId: StepId,
-  gateAnswerSchema: (request: GatePendingRequest) => Promise<z.ZodType>,
+  gateAnswerSchema: (request: GatePendingRequest) => Promise<ResolvedSchema>,
 ): Promise<AnswerResolution> {
   const request = await readPendingRequest(runDir, stepId)
   if (!request) throw new Error(`no pending request found for step "${stepId}"`)
@@ -163,9 +161,10 @@ export async function resolveAnswer(
   const answerRaw = await readAnswerRaw(runDir, stepId)
   if (answerRaw === undefined) return { status: 'missing', stepId }
 
-  const schema = request.kind === 'loop-exhausted' ? LoopExhaustionAnswerSchema : await gateAnswerSchema(request)
+  const schema =
+    request.kind === 'loop-exhausted' ? wrapZodSchema(LoopExhaustionAnswerSchema) : await gateAnswerSchema(request)
   const parsed = schema.safeParse(answerRaw)
-  if (!parsed.success) return { status: 'invalid', stepId, errors: formatZodError(parsed.error) }
+  if (!parsed.success) return { status: 'invalid', stepId, errors: parsed.errorSummary ?? '' }
 
   return { status: 'ok', stepId, request, answer: parsed.data }
 }

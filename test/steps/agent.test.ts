@@ -10,9 +10,8 @@ import {
   AgentStepFailedError,
   buildPrompt,
   callAgentOnce,
-  resolveAgentSchema,
+  resolveSchemaSpec,
   runAgentStep,
-  toJsonSchema,
 } from '../../src/steps/agent.js'
 
 let cwd: string
@@ -31,29 +30,50 @@ afterEach(async () => {
   await rm(cwd, { recursive: true, force: true })
 })
 
-describe('resolveAgentSchema', () => {
+describe('resolveSchemaSpec (named ref)', () => {
   it('resolves a named ZodType export', async () => {
-    const schema = await resolveAgentSchema('PlanSchema', cwd)
-    expect(schema.parse({ summary: 'x' })).toEqual({ summary: 'x' })
+    const schema = await resolveSchemaSpec('PlanSchema', cwd)
+    expect(schema.safeParse({ summary: 'x' })).toMatchObject({ success: true, data: { summary: 'x' } })
   })
 
   it('throws when the export is not a ZodType', async () => {
-    await expect(resolveAgentSchema('notASchema', cwd)).rejects.toThrow(/not found/)
+    await expect(resolveSchemaSpec('notASchema', cwd)).rejects.toThrow(/not found/)
   })
 
   it('throws when the key does not exist', async () => {
-    await expect(resolveAgentSchema('Nope', cwd)).rejects.toThrow(/not found/)
+    await expect(resolveSchemaSpec('Nope', cwd)).rejects.toThrow(/not found/)
+  })
+})
+
+describe('resolveSchemaSpec (inline)', () => {
+  it('resolves and validates an inline JSON Schema', async () => {
+    const schema = await resolveSchemaSpec(
+      { inline: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] } },
+      cwd,
+    )
+    expect(schema.safeParse({ summary: 'x' })).toMatchObject({ success: true, data: { summary: 'x' } })
+    expect(schema.safeParse({}).success).toBe(false)
+  })
+
+  it('throws when the inline document is not a well-formed JSON Schema', async () => {
+    await expect(resolveSchemaSpec({ inline: { type: 'not-a-real-type' } }, cwd)).rejects.toThrow()
   })
 })
 
 describe('toJsonSchema', () => {
-  it('converts a resolved ZodType into JSON Schema', async () => {
-    const schema = await resolveAgentSchema('PlanSchema', cwd)
-    const jsonSchema = toJsonSchema(schema, 'PlanSchema') as { definitions: Record<string, unknown> }
+  it('converts a resolved named-ref ZodType into JSON Schema', async () => {
+    const schema = await resolveSchemaSpec('PlanSchema', cwd)
+    const jsonSchema = schema.toJsonSchema('PlanSchema') as { definitions: Record<string, unknown> }
     expect(jsonSchema.definitions['PlanSchema']).toMatchObject({
       type: 'object',
       required: ['summary'],
     })
+  })
+
+  it('returns an inline schema as-is', async () => {
+    const inline = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] }
+    const schema = await resolveSchemaSpec({ inline }, cwd)
+    expect(schema.toJsonSchema()).toEqual(inline)
   })
 })
 

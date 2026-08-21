@@ -1,5 +1,6 @@
 export type StepId = string
 export type ArtifactName = string
+export type JSONSchema = Record<string, unknown>
 
 /** Either a jexl expression string, or a named function in .yak/predicates.ts */
 export type Expr = string | { fn: string }
@@ -23,7 +24,9 @@ export interface BaseStep {
 export interface AgentStep extends BaseStep {
   kind: 'agent'
   prompt: { file: string } | { inline: string }
-  schema?: string                      // key in .yak/schemas.ts
+  schema?: string | { inline: JSONSchema }   // key in .yak/schemas.ts (Zod, full
+                                              // power), or an inline JSON Schema
+                                              // (ajv, structural only)
   context?: 'fresh' | { inherit: ArtifactName[] } | { session: StepId }
   tools?: string[]
   model?: string
@@ -50,7 +53,7 @@ export interface TransformStep extends BaseStep {
 
 export interface GateStep extends BaseStep {
   kind: 'gate'
-  schema: string
+  schema: string | { inline: JSONSchema }
   render: { file: string } | { inline: string }
 }
 

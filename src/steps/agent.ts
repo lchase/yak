@@ -1,32 +1,15 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { ZodType, type ZodError } from 'zod'
-import { zodToJsonSchema } from 'zod-to-json-schema'
 import type { AgentAdapter } from '../adapters/types.js'
 import { writeRejectedOutput } from '../engine/artifacts.js'
 import { appendJournalEvent } from '../engine/journal.js'
 import { renderTemplate } from '../expr/template.js'
+import { resolveSchemaSpec, type ResolvedSchema } from '../ir/schema-resolve.js'
 import type { AgentStep, StepFailure } from '../ir/types.js'
 
 export { agentInputNames } from '../ir/graph.js'
-
-export async function resolveAgentSchema(name: string, cwd: string): Promise<ZodType> {
-  const modulePath = path.resolve(cwd, '.yak/schemas.ts')
-  const mod: Record<string, unknown> = await import(pathToFileURL(modulePath).href)
-  const schema = mod[name]
-  if (!(schema instanceof ZodType)) {
-    throw new Error(`schema "${name}" not found in .yak/schemas.ts`)
-  }
-  return schema
-}
-
-/** Omitting `name` inlines the schema directly rather than wrapping it in
- * a `$ref`/`definitions` indirection — needed wherever a consumer expects
- * a flat object schema (e.g. `--interactive`'s renderer, ticket 04). */
-export function toJsonSchema(schema: ZodType, name?: string): object {
-  return name === undefined ? zodToJsonSchema(schema) : zodToJsonSchema(schema, name)
-}
+export { resolveSchemaSpec } from '../ir/schema-resolve.js'
+export type { ResolvedSchema } from '../ir/schema-resolve.js'
 
 export async function buildPrompt(step: AgentStep, inputs: Record<string, unknown>, cwd: string): Promise<string> {
   const text =
@@ -54,8 +37,8 @@ export async function callAgentOnce(
   promptSuffix?: string,
 ): Promise<{ output: unknown; sessionId: string }> {
   const prompt = (await buildPrompt(step, inputs, ctx.cwd)) + (promptSuffix ?? '')
-  const schema = step.schema ? await resolveAgentSchema(step.schema, ctx.cwd) : undefined
-  const jsonSchema = schema ? toJsonSchema(schema) : undefined
+  const schema = step.schema ? await resolveSchemaSpec(step.schema, ctx.cwd) : undefined
+  const jsonSchema = schema ? schema.toJsonSchema() : undefined
 
   const response = await ctx.adapter.run({
     prompt,
@@ -85,12 +68,6 @@ export class AgentStepFailedError extends Error {
   }
 }
 
-/** One line per issue: `path.to.field: <zod's own message>` — zod's default
- * `invalid_type` message already reads "Expected X, received Y". */
-function formatZodError(error: ZodError): string {
-  return error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('\n')
-}
-
 function repairSuffix(jsonSchema: object, errorSummary: string): string {
   return (
     `\n\n---\nYour previous output did not match the required schema.\n` +
@@ -114,7 +91,9 @@ export async function runAgentStep(
   ctx: AgentCallContext,
   onSessionId?: (sessionId: string) => void,
 ): Promise<unknown> {
-  const schema = step.schema ? await resolveAgentSchema(step.schema, ctx.cwd) : undefined
+  const schema: ResolvedSchema | undefined = step.schema
+    ? await resolveSchemaSpec(step.schema, ctx.cwd)
+    : undefined
   const maxAttempts = (step.repairAttempts ?? 2) + 1
 
   let sessionId = ctx.sessionId
@@ -133,8 +112,8 @@ export async function runAgentStep(
     const parsed = schema.safeParse(call.output)
     if (parsed.success) return parsed.data
 
-    lastErrorSummary = formatZodError(parsed.error)
-    suffix = repairSuffix(toJsonSchema(schema), lastErrorSummary)
+    lastErrorSummary = parsed.errorSummary ?? ''
+    suffix = repairSuffix(schema.toJsonSchema(), lastErrorSummary)
   }
 
   await writeRejectedOutput(ctx.runDir, step.id, maxAttempts, JSON.stringify(lastOutput, null, 2))
