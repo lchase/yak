@@ -39,6 +39,12 @@ export const DraftSchema = z.object({
   sentence: z.string(),
 })
 
+// yak cookbook pattern: loop persistent context (freshContext: false)
+// (fixtures/loop-persistent-context/workflow.yaml).
+export const CountSchema = z.object({
+  n: z.number(),
+})
+
 // yak cookbook pattern: standalone transform
 // (fixtures/standalone-transform/workflow.yaml).
 export const TodoExtractSchema = z.object({
