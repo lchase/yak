@@ -139,6 +139,12 @@ async function runLoopBody(
   let priorValues = resumeFrom?.priorValues ?? new Map<ArtifactName, unknown>()
   let priorHashes = resumeFrom?.priorHashes ?? new Map<ArtifactName, string>()
   let lastSignal: unknown
+  // Ticket 07: scoped to this one `runLoopBody` call (one loop-step
+  // execution), same process-local, non-journaled lifetime as the
+  // top-level scheduler's own `context: { session }` map
+  // (`src/engine/scheduler.ts`'s `agentSessionIds`) — not resume-safe,
+  // matching that pre-existing limitation rather than fixing it here.
+  const bodySessionIds = new Map<StepId, string>()
 
   for (let iteration = resumeFrom?.startIteration ?? 1; ; iteration++) {
     const thisValues = new Map<ArtifactName, unknown>()
@@ -157,6 +163,8 @@ async function runLoopBody(
           priorHashes,
           thisValues,
           thisHashes,
+          freshContext: step.freshContext ?? true,
+          bodySessionIds,
         })
       }
     } catch (err) {
@@ -290,6 +298,8 @@ interface RunOneBodyStepArgs {
   priorHashes: Map<ArtifactName, string>
   thisValues: Map<ArtifactName, unknown>
   thisHashes: Map<ArtifactName, string>
+  freshContext: boolean
+  bodySessionIds: Map<StepId, string>
 }
 
 /** Ticket 01's within-iteration ordering: a need resolved via the loop-local
@@ -309,6 +319,8 @@ async function runOneBodyStep(args: RunOneBodyStepArgs): Promise<void> {
     priorHashes,
     thisValues,
     thisHashes,
+    freshContext,
+    bodySessionIds,
   } = args
 
   const inputs: Record<string, unknown> = {}
@@ -353,7 +365,7 @@ async function runOneBodyStep(args: RunOneBodyStepArgs): Promise<void> {
     cached = true
     stale = decision.stale
   } else {
-    result = await runBodyStepKind(bodyStep, inputs, ctx, iteration)
+    result = await runBodyStepKind(bodyStep, inputs, ctx, iteration, freshContext, bodySessionIds)
   }
 
   let artifactHash: string | undefined
@@ -396,13 +408,21 @@ async function runBodyStepKind(
   inputs: Record<string, unknown>,
   ctx: LoopRunContext,
   iteration: number,
+  freshContext: boolean,
+  bodySessionIds: Map<StepId, string>,
 ): Promise<unknown> {
   try {
     if (bodyStep.kind === 'command') return await runCommandStep(bodyStep, ctx.cwd)
     if (bodyStep.kind === 'transform') return await runTransformStep(bodyStep, inputs, ctx.cwd)
     if (bodyStep.kind === 'agent') {
       const adapter = ctx.buildAdapter(bodyStep, iteration)
-      return await runAgentStep(bodyStep, inputs, { runId: ctx.runId, runDir: ctx.runDir, cwd: ctx.cwd, adapter })
+      const sessionId = freshContext ? undefined : bodySessionIds.get(bodyStep.id)
+      return await runAgentStep(
+        bodyStep,
+        inputs,
+        { runId: ctx.runId, runDir: ctx.runDir, cwd: ctx.cwd, adapter, sessionId },
+        freshContext ? undefined : (nextSessionId) => bodySessionIds.set(bodyStep.id, nextSessionId),
+      )
     }
   } catch (err) {
     if (err instanceof CommandStepFailedError || err instanceof AgentStepFailedError) {
