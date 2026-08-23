@@ -19,6 +19,12 @@ export interface BaseStep {
   cache?: 'strict' | 'loose'          // default 'strict'
   skipIf?: Expr                        // command/transform/agent: skip entirely, no artifact.
                                         // gate: skip the pause, auto-answer from schema defaults.
+  finally?: boolean                    // command/transform/agent/gate: eligible once every `needs`
+                                        // producer has settled (completed OR failed), not just
+                                        // completed — runs regardless of upstream outcome. A `needs`
+                                        // artifact whose producer failed resolves to `undefined`.
+                                        // Never un-fails the run: overall status stays 'failed' if
+                                        // any non-finally step failed. Default false.
 }
 
 export interface AgentStep extends BaseStep {

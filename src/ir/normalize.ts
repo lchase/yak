@@ -51,6 +51,7 @@ interface RawStep {
   produces?: string
   cache?: 'strict' | 'loose'
   skipIf?: Expr                        // BaseStep-level: applies to command/transform/agent/gate.
+  finally?: boolean                    // BaseStep-level: applies to command/transform/agent/gate.
   command?: z.infer<typeof rawCommandSchema>
   transform?: z.infer<typeof rawTransformSchema>
   agent?: z.infer<typeof rawAgentSchema>
@@ -80,6 +81,7 @@ const rawStepSchema: z.ZodType<RawStep> = z.lazy(() =>
     produces: z.string().optional(),
     cache: z.enum(['strict', 'loose']).optional(),
     skipIf: rawExprSchema.optional(),
+    finally: z.boolean().optional(),
     command: rawCommandSchema.optional(),
     transform: rawTransformSchema.optional(),
     agent: rawAgentSchema.optional(),
@@ -125,6 +127,7 @@ function normalizeStep(raw: RawStep): Step {
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
       ...(raw.command.cwd !== undefined ? { cwd: raw.command.cwd } : {}),
       ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
+      ...(raw.finally !== undefined ? { finally: raw.finally } : {}),
     }
     return step
   }
@@ -138,6 +141,7 @@ function normalizeStep(raw: RawStep): Step {
       fn: raw.transform.fn,
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
       ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
+      ...(raw.finally !== undefined ? { finally: raw.finally } : {}),
     }
     return step
   }
@@ -156,6 +160,7 @@ function normalizeStep(raw: RawStep): Step {
       ...(raw.agent.repairAttempts !== undefined ? { repairAttempts: raw.agent.repairAttempts } : {}),
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
       ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
+      ...(raw.finally !== undefined ? { finally: raw.finally } : {}),
     }
     return step
   }
@@ -169,6 +174,7 @@ function normalizeStep(raw: RawStep): Step {
       schema: raw.gate.schema,
       render: raw.gate.render,
       ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
+      ...(raw.finally !== undefined ? { finally: raw.finally } : {}),
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
     }
     return step

@@ -62,6 +62,20 @@ export async function readArtifactRaw(runDir: string, name: string, iteration?: 
   return readArtifact(runDir, name, z.unknown(), iteration)
 }
 
+/** A `finally: true` step's `needs` may name an artifact whose producer
+ * failed and so never wrote it — that's expected, not a bug, so it
+ * resolves to `undefined` instead of throwing. Any other missing-artifact
+ * read (a step that isn't `finally`) still throws: that indicates a real
+ * graph/scheduling bug, not an outcome the step should route around. */
+export async function readArtifactRawOrUndefined(runDir: string, name: string): Promise<unknown> {
+  try {
+    return await readArtifactRaw(runDir, name)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw err
+  }
+}
+
 /** Ticket 09: which of a `map` step's per-item files currently exist on
  * disk, sorted by index — works whether the fan-out is complete or still
  * partial (a live or interrupted run), since it globs the numbered files

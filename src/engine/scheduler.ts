@@ -13,7 +13,7 @@ import { runGateStep } from '../steps/gate.js'
 import { runLoopStep } from '../steps/loop.js'
 import { runMapStep } from '../steps/map.js'
 import { runTransformStep } from '../steps/transform.js'
-import { readArtifactRaw, writeArtifact } from './artifacts.js'
+import { readArtifactRaw, readArtifactRawOrUndefined, writeArtifact } from './artifacts.js'
 import {
   computeDefinitionKey,
   computeSemanticKey,
@@ -141,6 +141,7 @@ export async function runEligibleSteps(
   const producerOf = buildProducerMap(workflow.steps)
   const remaining = new Map(workflow.steps.map((s) => [s.id, s]))
   const completed = new Set<StepId>()
+  const failedSteps = new Set<StepId>()
   const inFlight = new Map<StepId, Promise<'ok' | 'failed' | 'suspended'>>()
   const artifactHashes = new Map<ArtifactName, string>()
   let failed = false
@@ -150,11 +151,29 @@ export async function runEligibleSteps(
 
   const agentSessionIds = new Map<StepId, string>()
 
+  // Ticket 06: a `finally: true` step is eligible once its own deps have
+  // *settled* (completed OR failed), independent of the global `failed`
+  // flag — every other step still stops being launched the instant
+  // anything fails (the pre-existing halt-on-first-failure behavior).
+  // Suspension blocks everything, `finally` included: a suspended run
+  // hasn't reached a terminal state yet, so nothing downstream should
+  // fire until it resumes.
   function launchEligible(): void {
-    if (failed || suspended) return
+    if (suspended) return
     for (const step of remaining.values()) {
       if (inFlight.has(step.id)) continue
-      if (dependenciesOf(step, producerOf).every((dep) => completed.has(dep))) {
+      const deps = dependenciesOf(step, producerOf)
+      if (step.finally) {
+        if (deps.every((dep) => completed.has(dep) || failedSteps.has(dep))) {
+          inFlight.set(
+            step.id,
+            limit(() => runStep(step, ctx, artifactHashes, workflow.name, agentSessionIds)),
+          )
+        }
+        continue
+      }
+      if (failed) continue
+      if (deps.every((dep) => completed.has(dep))) {
         inFlight.set(
           step.id,
           limit(() => runStep(step, ctx, artifactHashes, workflow.name, agentSessionIds)),
@@ -171,8 +190,10 @@ export async function runEligibleSteps(
     )
     inFlight.delete(doneId)
     remaining.delete(doneId)
-    if (status === 'failed') failed = true
-    else if (status === 'suspended') suspended = true
+    if (status === 'failed') {
+      failed = true
+      failedSteps.add(doneId)
+    } else if (status === 'suspended') suspended = true
     else completed.add(doneId)
     launchEligible()
   }
@@ -211,7 +232,9 @@ async function runStep(
   if (step.kind === 'gate') {
     const inputs: Record<string, unknown> = {}
     for (const need of step.needs ?? []) {
-      inputs[need] = await readArtifactRaw(ctx.runDir, need)
+      inputs[need] = step.finally
+        ? await readArtifactRawOrUndefined(ctx.runDir, need)
+        : await readArtifactRaw(ctx.runDir, need)
     }
     return runGateStep(step, inputs, { runId: ctx.runId, runDir: ctx.runDir, cwd: ctx.cwd })
   }
@@ -247,7 +270,9 @@ async function runStep(
   if (step.skipIf) {
     const skipInputs: Record<string, unknown> = {}
     for (const name of inputNamesOf(step)) {
-      skipInputs[name] = await readArtifactRaw(ctx.runDir, name)
+      skipInputs[name] = step.finally
+        ? await readArtifactRawOrUndefined(ctx.runDir, name)
+        : await readArtifactRaw(ctx.runDir, name)
     }
     const skip = Boolean(await evalExpr(step.skipIf, skipInputs, ctx.cwd))
     if (skip) {
@@ -295,13 +320,17 @@ async function runStep(
     } else if (step.kind === 'transform') {
       const inputs: Record<string, unknown> = {}
       for (const need of step.needs ?? []) {
-        inputs[need] = await readArtifactRaw(ctx.runDir, need)
+        inputs[need] = step.finally
+          ? await readArtifactRawOrUndefined(ctx.runDir, need)
+          : await readArtifactRaw(ctx.runDir, need)
       }
       result = await runTransformStep(step, inputs, ctx.cwd)
     } else {
       const inputs: Record<string, unknown> = {}
       for (const name of agentInputNames(step)) {
-        inputs[name] = await readArtifactRaw(ctx.runDir, name)
+        inputs[name] = step.finally
+          ? await readArtifactRawOrUndefined(ctx.runDir, name)
+          : await readArtifactRaw(ctx.runDir, name)
       }
       const sessionId =
         typeof step.context === 'object' && 'session' in step.context

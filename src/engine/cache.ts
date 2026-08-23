@@ -25,9 +25,16 @@ export type CacheDecision =
 function definitionPayload(step: Step): unknown {
   switch (step.kind) {
     case 'command':
-      return { run: step.run, cwd: step.cwd, failOn: step.failOn, capture: step.capture, skipIf: step.skipIf }
+      return {
+        run: step.run,
+        cwd: step.cwd,
+        failOn: step.failOn,
+        capture: step.capture,
+        skipIf: step.skipIf,
+        finally: step.finally,
+      }
     case 'transform':
-      return { fn: step.fn, skipIf: step.skipIf }
+      return { fn: step.fn, skipIf: step.skipIf, finally: step.finally }
     case 'agent':
       return {
         prompt: step.prompt,
@@ -36,9 +43,10 @@ function definitionPayload(step: Step): unknown {
         model: step.model,
         repairAttempts: step.repairAttempts,
         skipIf: step.skipIf,
+        finally: step.finally,
       }
     case 'gate':
-      return { schema: step.schema, render: step.render, skipIf: step.skipIf }
+      return { schema: step.schema, render: step.render, skipIf: step.skipIf, finally: step.finally }
     case 'map':
       return {
         over: step.over,
