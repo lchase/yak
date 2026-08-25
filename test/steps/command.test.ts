@@ -53,17 +53,22 @@ describe('runCommandStep', () => {
     expect(result.stdout).toBe('hi\n')
   })
 
-  it('kills a silent process and fails with reason timeout once idleTimeoutMs elapses', async () => {
-    // `sleep` has no SIGTERM handler, so the default action (terminate) fires
-    // immediately — this resolves well inside the 5s SIGTERM→SIGKILL grace
-    // period, so the test doesn't have to wait it out.
-    const failing = runCommandStep(step({ run: 'sleep 5', idleTimeoutMs: 50 }), process.cwd())
-    await expect(failing).rejects.toBeInstanceOf(CommandStepFailedError)
-    await failing.catch((err: CommandStepFailedError) => {
-      expect(err.failure.reason).toBe('timeout')
-      expect(err.failure.recoverable).toBe(false)
-    })
-  })
+  it(
+    'kills a silent process and fails with reason timeout once idleTimeoutMs elapses',
+    async () => {
+      // `sleep` has no SIGTERM handler, so the default action (terminate) fires
+      // immediately — this resolves well inside the 5s SIGTERM→SIGKILL grace
+      // period, so the test doesn't have to wait it out. Explicit timeout above
+      // vitest's 5000ms default gives slower/loaded CI runners headroom.
+      const failing = runCommandStep(step({ run: 'sleep 5', idleTimeoutMs: 50 }), process.cwd())
+      await expect(failing).rejects.toBeInstanceOf(CommandStepFailedError)
+      await failing.catch((err: CommandStepFailedError) => {
+        expect(err.failure.reason).toBe('timeout')
+        expect(err.failure.recoverable).toBe(false)
+      })
+    },
+    10000,
+  )
 
   describe('sandbox: docker', () => {
     it('builds the expected docker run argv — fixed /workspace mount, --network none, --rm', () => {
