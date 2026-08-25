@@ -1,10 +1,23 @@
 {
   "name": "@lchase/yak",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "An agentic workflow engine",
+  "license": "MIT",
   "type": "module",
   "bin": {
-    "yak": "./dist/index.js"
+    "yak": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lchase/yak.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=22"
