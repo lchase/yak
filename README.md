@@ -77,6 +77,15 @@ journal correctly before nondeterministic steps go anywhere near it.
   module boundary — CI never calls a real model, per CLAUDE.md.
 
 Not yet implemented: eval-corpus export (`yak export --evals`,
-descoped from M4, spec.md §9 decision 10), an API/CLI/YAML reference
-beyond spec.md, and npm publish (`docs-site/`'s quickstart still targets
-a git-clone install for that reason).
+descoped from M4, spec.md §9 decision 10) and an API/CLI/YAML reference
+beyond spec.md.
+
+## Install
+
+```bash
+npm install -g @lchase/yak
+```
+
+Published from `main` via a `release-please`-driven pipeline — see
+`CONTRIBUTING.md` for the release process. `docs-site/`'s quickstart
+still walks through a git-clone install, which also still works.
