@@ -112,7 +112,7 @@ The `plan` step's prompt didn't just ask for a description — it told the
 agent to edit the file:
 
 ```yaml title="fixtures/todo-app/workflow.yaml"
-- id: plan
+- id: plan  # excerpt — full file also has name/version at top and the triage/check/summarize steps
   agent:
     prompt: { file: "fixtures/todo-app/prompts/plan.md" }
     schema: PlanSchema

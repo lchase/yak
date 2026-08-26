@@ -26,6 +26,8 @@ model behavior, same trick the [loop onExhausted](./loop-on-exhausted)
 pattern uses:
 
 ```yaml title="fixtures/map-on-item-failure/workflow-fail.yaml"
+name: map-on-item-failure-fail
+version: "1"
 steps:
   - id: checks
     transform: { fn: batchChecks }

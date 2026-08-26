@@ -44,6 +44,8 @@ reach for:
 ## The workflow
 
 ```yaml title="fixtures/standalone-transform/workflow.yaml"
+name: standalone-transform
+version: "1"
 steps:
   - id: extract
     agent:

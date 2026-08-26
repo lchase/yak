@@ -29,6 +29,8 @@ so exhaustion happens on schedule after exactly one iteration regardless
 of what the model writes.
 
 ```yaml title="fixtures/loop-on-exhausted/workflow-fail.yaml"
+name: loop-on-exhausted-fail
+version: "1"
 steps:
   - id: draft-until-perfect
     loop:
