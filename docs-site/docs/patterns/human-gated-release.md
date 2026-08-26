@@ -27,6 +27,8 @@ never pushed anywhere.
 ## The workflow
 
 ```yaml title="fixtures/release-demo/workflow.yaml"
+name: gate-release
+version: "1"
 steps:
   - id: implement
     agent:

@@ -23,6 +23,8 @@ did last round on its own — no artifact threading required.
 ## The workflow
 
 ```yaml title="fixtures/loop-persistent-context/workflow.yaml"
+name: loop-persistent-context
+version: "1"
 steps:
   - id: count-until-four
     loop:

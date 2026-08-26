@@ -29,6 +29,8 @@ None of the three fixes touch another file.
 ## The workflow
 
 ```yaml title="fixtures/batch-issues/workflow.yaml"
+name: map-fanout-batch-issues
+version: "1"
 steps:
   - id: triage
     agent:

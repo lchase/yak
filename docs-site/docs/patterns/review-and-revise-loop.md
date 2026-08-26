@@ -37,6 +37,8 @@ cases.
 ## The workflow
 
 ```yaml title="fixtures/loop-demo/workflow.yaml"
+name: loop-review-revise
+version: "1"
 steps:
   - id: fix-until-approved
     loop:
