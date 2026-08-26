@@ -115,7 +115,13 @@ agent to edit the file:
 - id: plan
   agent:
     prompt: { file: "fixtures/todo-app/prompts/plan.md" }
-    schema: PlanSchema
+    schema:
+      inline:
+        type: object
+        properties:
+          summary: { type: string }
+          steps: { type: array, items: { type: string } }
+        required: [summary, steps]
     context: { inherit: [triage] }
     tools: [Read, Edit]
 ```

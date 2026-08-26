@@ -4,13 +4,25 @@ steps:
   - id: triage
     agent:
       prompt: { inline: "Triage this issue and produce a structured summary." }
-      schema: TriageSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            summary: { type: string }
+            confidence: { type: number }
+          required: [summary, confidence]
     produces: triage
 
   - id: plan
     agent:
       prompt: { file: ".yak/prompts/plan.md" }
-      schema: PlanSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            summary: { type: string }
+            steps: { type: array, items: { type: string } }
+          required: [summary, steps]
       context: { inherit: [triage] }
     produces: plan
 
