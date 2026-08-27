@@ -3,14 +3,18 @@ sidebar_position: 7
 title: Standalone transform
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: standalone transform
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 one real model call for `extract`; `summarize-todos` costs nothing at
 all. Assumes you've already read the [quickstart](../quickstart) and
 [tutorial](../tutorial).
-:::
+
+</Admonition>
 
 Every pattern on this site already uses a `transform` step somewhere —
 `prepFeedback` in the review-and-revise loop, `parseTestResult` there
@@ -26,7 +30,8 @@ TypeScript function, `(inputs) => unknown`, resolved by dynamic
 No model call, no subprocess, no network — just data reshaping between
 two steps that do need one of those things.
 
-:::info The `.yak/` path is fixed, not configurable
+<Admonition type="info" title="The `.yak/` path is fixed, not configurable">
+
 `transform: { fn: 'someFn' }` always resolves against
 `<cwd>/.yak/transforms.ts` — `resolveTransformFn`
 (`src/steps/transform.ts`) hardcodes that path, joined to whatever `cwd`
@@ -43,7 +48,8 @@ difference is a schema has an escape hatch a transform doesn't:
 structurally instead of by name. A `transform` step has no inline form —
 `fn` is always a string key, so it always needs `.yak/transforms.ts` to
 exist.
-:::
+
+</Admonition>
 
 The alternative isn't hypothetical; it's the two things people actually
 reach for:

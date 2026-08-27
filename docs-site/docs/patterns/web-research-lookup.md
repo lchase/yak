@@ -3,16 +3,20 @@ sidebar_position: 9
 title: Web research / lookup
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: fan-out research, fan-in report
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 three real `WebSearch`/`WebFetch` agent calls, run concurrently.
 Assumes you've already read the [quickstart](../quickstart),
 [tutorial](../tutorial), and
 [fan-out-over-issues](./fan-out-over-issues) (this pattern's `map`
 mechanics are identical — the new part is what happens after).
-:::
+
+</Admonition>
 
 An `agent` step with `tools: [WebSearch, WebFetch]` can look things up
 live — no MCP server, no custom integration, just two built-in tools on

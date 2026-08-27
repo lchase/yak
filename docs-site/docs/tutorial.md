@@ -3,14 +3,18 @@ sidebar_position: 2
 title: Tutorial
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Tutorial: fix a real bug
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Unlike the quickstart, this page runs against the real `claude-code`
 adapter — a real Claude Agent SDK call, real tokens, real cost. You'll
 need `ANTHROPIC_API_KEY` set. Everything else on this site is free to
 follow along with; this is the one exception.
-:::
+
+</Admonition>
 
 The quickstart proved the engine runs. This proves it's useful: yak
 finds and fixes an actual bug in a real (if small) codebase, on its own,

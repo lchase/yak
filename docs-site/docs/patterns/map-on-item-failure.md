@@ -3,14 +3,18 @@ sidebar_position: 5
 title: "map: onItemFailure fail vs retry"
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: map `onItemFailure` fail vs retry
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 one real model call, only in the `retry` variant (see below). Assumes
 you've already read [fan out over a batch of issues](./fan-out-over-issues),
 which covers `map` basics and the default `onItemFailure: 'skip'`.
-:::
+
+</Admonition>
 
 `onItemFailure` decides what a `map` step does when at least one item
 fails. `'skip'` (the default, and what the fan-out-over-issues pattern

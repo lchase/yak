@@ -3,14 +3,18 @@ sidebar_position: 1
 title: Review-and-revise loop
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: review-and-revise loop
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 two real model calls per round, up to `maxIterations` rounds. Assumes
 you've already read the [quickstart](../quickstart) and
 [tutorial](../tutorial).
-:::
+
+</Admonition>
 
 A `loop` step bounds iteration with `maxIterations` and, optionally, a
 `noProgress` check — a signal that must keep improving or the loop

@@ -3,14 +3,18 @@ sidebar_position: 6
 title: "loop: persistent context (freshContext: false)"
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: loop with persistent context
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 one real model call per round. Assumes you've already read the
 [review-and-revise loop](./review-and-revise-loop) pattern, which covers
 `loop` basics.
-:::
+
+</Admonition>
 
 Every other loop pattern on this site gives each iteration a fresh
 model context and threads whatever state the next round needs through
