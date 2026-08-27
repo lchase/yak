@@ -57,7 +57,8 @@ const config: Config = {
       title: 'yak',
       logo: {
         alt: 'yak logo',
-        src: 'img/logo.svg',
+        src: 'img/yak-logo-light.svg',
+        srcDark: 'img/yak-logo.svg',
       },
       items: [
         {
