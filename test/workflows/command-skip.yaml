@@ -3,7 +3,13 @@ version: "1"
 steps:
   - id: decide
     gate:
-      schema: ApprovalSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            decision: { type: string, enum: [approve, reject] }
+            notes: { type: string }
+          required: [decision]
       render: { inline: "Release?" }
     produces: decision
 
