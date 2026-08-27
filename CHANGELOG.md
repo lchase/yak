@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/lchase/yak/compare/yak-v0.2.0...yak-v0.2.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* stop cropping the tagline off the mascot header image ([#20](https://github.com/lchase/yak/issues/20)) ([b95e52f](https://github.com/lchase/yak/commit/b95e52fcaddecca6000528c4b26ec4944d1ec3bf))
+
 ## [0.2.0](https://github.com/lchase/yak/compare/yak-v0.1.2...yak-v0.2.0) (2026-08-27)
 
 
