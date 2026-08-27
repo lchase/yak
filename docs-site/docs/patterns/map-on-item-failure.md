@@ -3,14 +3,18 @@ sidebar_position: 5
 title: "map: onItemFailure fail vs retry"
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: map `onItemFailure` fail vs retry
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 one real model call, only in the `retry` variant (see below). Assumes
 you've already read [fan out over a batch of issues](./fan-out-over-issues),
 which covers `map` basics and the default `onItemFailure: 'skip'`.
-:::
+
+</Admonition>
 
 `onItemFailure` decides what a `map` step does when at least one item
 fails. `'skip'` (the default, and what the fan-out-over-issues pattern
@@ -82,7 +86,11 @@ need:
   index 2 the one that always fails.
 - **`summarize`'s `schema` is inline** (`{ inline: {...} }`), not a
   `.yak/schemas.ts` key — the two forms are interchangeable per-step;
-  this page just happens to use the other one.
+  this page just happens to use the other one. (A named key resolves
+  against a fixed path, `.yak/schemas.ts` relative to the run's `cwd` —
+  see [standalone
+  transform](./standalone-transform#why-transform-is-its-own-step-kind)
+  for that mechanism; inline is the only way to skip it.)
 
 ## Run both
 

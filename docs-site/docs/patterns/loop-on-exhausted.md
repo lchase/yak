@@ -3,14 +3,18 @@ sidebar_position: 4
 title: "loop: onExhausted fail vs continue"
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: loop `onExhausted` fail vs continue
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 one real model call per run. Assumes you've already read the
 [review-and-revise loop](./review-and-revise-loop) pattern, which covers
 `loop` basics and the default `onExhausted: 'suspend'`.
-:::
+
+</Admonition>
 
 `onExhausted` decides what a `loop` step does when its budget runs out
 before `until` is ever satisfied. The
@@ -42,7 +46,12 @@ steps:
         - id: draft
           agent:
             prompt: { inline: "Write one short sentence describing what mergesort does." }
-            schema: DraftSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  sentence: { type: string }
+                required: [sentence]
           produces: draft
 ```
 

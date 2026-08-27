@@ -3,14 +3,18 @@ sidebar_position: 7
 title: Standalone transform
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: standalone transform
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 one real model call for `extract`; `summarize-todos` costs nothing at
 all. Assumes you've already read the [quickstart](../quickstart) and
 [tutorial](../tutorial).
-:::
+
+</Admonition>
 
 Every pattern on this site already uses a `transform` step somewhere —
 `prepFeedback` in the review-and-revise loop, `parseTestResult` there
@@ -25,6 +29,27 @@ TypeScript function, `(inputs) => unknown`, resolved by dynamic
 `import()` the same way `.yak/schemas.ts` and `.yak/predicates.ts` are.
 No model call, no subprocess, no network — just data reshaping between
 two steps that do need one of those things.
+
+<Admonition type="info" title="The `.yak/` path is fixed, not configurable">
+
+`transform: { fn: 'someFn' }` always resolves against
+`<cwd>/.yak/transforms.ts` — `resolveTransformFn`
+(`src/steps/transform.ts`) hardcodes that path, joined to whatever `cwd`
+the run itself is using (the repo root normally; the worktree's root
+under `--isolation worktree`). There's no per-workflow field to point
+it somewhere else, and no notion of "the transforms file next to this
+workflow" — every workflow run from the same `cwd` shares one
+`.yak/transforms.ts`, which is why this repo keeps a single one at its
+root rather than one per fixture. `resolveSchemaSpec`
+(`src/ir/schema-resolve.ts`) does the exact same fixed-path lookup for a
+named `schema: SomeSchema` ref against `.yak/schemas.ts` — the one
+difference is a schema has an escape hatch a transform doesn't:
+`schema: { inline: {...} }` skips `.yak/schemas.ts` entirely, resolved
+structurally instead of by name. A `transform` step has no inline form —
+`fn` is always a string key, so it always needs `.yak/transforms.ts` to
+exist.
+
+</Admonition>
 
 The alternative isn't hypothetical; it's the two things people actually
 reach for:
@@ -55,7 +80,19 @@ steps:
           {task, priority}, priority one of high/medium/low: "Fix the
           login bug, it's urgent. Update the docs. Refactor the cache
           layer, low priority. Ship the release, high priority."
-      schema: TodoExtractSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            todos:
+              type: array
+              items:
+                type: object
+                properties:
+                  task: { type: string }
+                  priority: { type: string, enum: [high, medium, low] }
+                required: [task, priority]
+          required: [todos]
     produces: extracted
 
   - id: summarize-todos

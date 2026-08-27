@@ -3,14 +3,18 @@ sidebar_position: 2
 title: Fan out over a batch of issues
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: fan out over a batch of issues
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 one real model call per item, run concurrently, plus one for triage.
 Assumes you've already read the [quickstart](../quickstart) and
 [tutorial](../tutorial).
-:::
+
+</Admonition>
 
 A `map` step fans a list out over one item step, run concurrently up to
 a `concurrency` cap. `isolation: 'worktree'` gives each item its own git
@@ -35,7 +39,13 @@ steps:
   - id: triage
     agent:
       prompt: { file: "fixtures/batch-issues/prompts/triage.md" }
-      schema: TriageSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            summary: { type: string }
+            confidence: { type: number }
+          required: [summary, confidence]
       tools: [Read, Glob, Write]
     produces: triage
 
@@ -60,7 +70,12 @@ steps:
               bugs, then read {{issues.file}} and {{issues.test}}. Fix the
               bug in {{issues.file}} (id: {{issues.id}}) so its test
               passes. Make only the edit needed for this one bug.
-          schema: ImplementSchema
+          schema:
+            inline:
+              type: object
+              properties:
+                summary: { type: string }
+              required: [summary]
           tools: [Read, Edit]
     produces: fixResults
 ```

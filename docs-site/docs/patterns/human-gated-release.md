@@ -3,14 +3,18 @@ sidebar_position: 3
 title: Human-gated release
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: human-gated release
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter — one
 real model call to implement, plus whatever `--interactive` or `yak
 resume` costs you in thinking time. Assumes you've already read the
 [quickstart](../quickstart) and [tutorial](../tutorial).
-:::
+
+</Admonition>
 
 A `gate` step suspends the run and asks a human a question. Only a
 `command` step is ever allowed to perform an escaping side effect — a
@@ -33,7 +37,12 @@ steps:
   - id: implement
     agent:
       prompt: { file: "fixtures/release-demo/prompts/implement.md" }
-      schema: ImplementSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            summary: { type: string }
+          required: [summary]
       tools: [Read, Edit]
     produces: implementResult
 
@@ -53,7 +62,13 @@ steps:
   - id: release-gate
     needs: [implementResult, testResult]
     gate:
-      schema: ApprovalSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            decision: { type: string, enum: [approve, reject] }
+            notes: { type: string }
+          required: [decision]
       render: { file: "fixtures/release-demo/prompts/release-gate.md" }
     produces: releaseDecision
 

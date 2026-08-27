@@ -186,13 +186,32 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       const filesChanged = new Set<string>()
       let result: Extract<SDKMessage, { type: 'result' }> | undefined
 
-      // Ticket 03: write the raw SDKMessage stream verbatim, one JSON object
-      // per line, unfiltered — already JSONL-shaped, matches the SDK's own
-      // on-disk session format.
-      for await (const message of query({ prompt: req.prompt, options })) {
-        await appendFile(sessionLogPath, `${JSON.stringify(message)}\n`, 'utf8')
-        collectFilesChanged(message, filesChanged)
-        if (message.type === 'result') result = message
+      // `query()` itself throwing (bad options, the CLI process failing to
+      // spawn at all) is a hard infra failure — left to propagate unwrapped,
+      // same as a thrown/rejected promise before any message ever arrived.
+      // Once the stream is iterating, though, an error thrown mid-stream is
+      // a genuine per-turn failure (the SDK wraps some structured-output
+      // exhaustion cases this way instead of a `result` message) — same
+      // class of thing `mapResultError` below handles, so it needs the same
+      // `AgentStepFailedError` wrapping to go through the typed StepFailure
+      // path (and, inside a `map`, respect `onItemFailure` instead of
+      // hard-failing the whole run).
+      const stream = query({ prompt: req.prompt, options })
+      try {
+        // Ticket 03: write the raw SDKMessage stream verbatim, one JSON
+        // object per line, unfiltered — already JSONL-shaped, matches the
+        // SDK's own on-disk session format.
+        for await (const message of stream) {
+          await appendFile(sessionLogPath, `${JSON.stringify(message)}\n`, 'utf8')
+          collectFilesChanged(message, filesChanged)
+          if (message.type === 'result') result = message
+        }
+      } catch (err) {
+        throw new AgentStepFailedError({
+          reason: 'adapter-error',
+          detail: `claude-code adapter for step "${this.stepId}": query() stream errored: ${(err as Error).message}`,
+          recoverable: true,
+        })
       }
 
       if (!result) {

@@ -1,4 +1,4 @@
-import type { JournalEnvelope, LoopStep, Step, StepId } from '../ir/types.js'
+import type { JournalEnvelope, LoopStep, Step, StepFailure, StepId } from '../ir/types.js'
 
 export type StepState = 'completed' | 'cached' | 'stale' | 'failed' | 'pending'
 
@@ -27,6 +27,20 @@ export function stepStatusesFromJournal(steps: Step[], events: JournalEnvelope[]
   }
 
   return steps.map((step) => ({ stepId: step.id, status: stateByStep.get(step.id) ?? 'pending' }))
+}
+
+/** `yak run`/`yak resume`: every `step.failed` a journal recorded, in order —
+ * a run's `status: 'failed'` alone doesn't say why; this is the detail. */
+export function failedStepsFromJournal(events: JournalEnvelope[]): { stepId: StepId; failure: StepFailure }[] {
+  return events
+    .filter((e) => e.t === 'step.failed')
+    .map((e) => ({ stepId: e.stepId, failure: e.failure }))
+}
+
+/** `<detail> (<reason>)` — callers prefix the step id themselves, since
+ * where it belongs (inline vs. its own indent level) differs by command. */
+export function formatStepFailure(failure: StepFailure): string {
+  return `${failure.detail} (${failure.reason})`
 }
 
 export type LoopState = 'pending' | 'running' | 'completed' | 'failed' | 'suspended'

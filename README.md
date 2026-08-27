@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs-site/static/img/yak-mascot.png" alt="yak mascot" width="320" />
+</p>
+
 # yak
 
 An agentic workflow engine. *It shaves the yak so you don't.*

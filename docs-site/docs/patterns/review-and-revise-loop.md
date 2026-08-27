@@ -3,14 +3,18 @@ sidebar_position: 1
 title: Review-and-revise loop
 ---
 
+import Admonition from '@theme/Admonition';
+
 # Pattern: review-and-revise loop
 
-:::caution Spends real API budget
+<Admonition type="caution" title="Spends real API budget">
+
 Like the tutorial, this runs against the real `claude-code` adapter —
 two real model calls per round, up to `maxIterations` rounds. Assumes
 you've already read the [quickstart](../quickstart) and
 [tutorial](../tutorial).
-:::
+
+</Admonition>
 
 A `loop` step bounds iteration with `maxIterations` and, optionally, a
 `noProgress` check — a signal that must keep improving or the loop
@@ -58,7 +62,12 @@ steps:
           needs: [priorFeedback]
           agent:
             prompt: { file: "fixtures/loop-demo/prompts/implement.md" }
-            schema: ImplementSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  summary: { type: string }
+                required: [summary]
             tools: [Read, Edit]
           produces: implementResult
 
@@ -79,7 +88,13 @@ steps:
           needs: [testResult]
           agent:
             prompt: { file: "fixtures/loop-demo/prompts/review.md" }
-            schema: ReviewSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  approved: { type: boolean }
+                  feedback: { type: string }
+                required: [approved, feedback]
             tools: [Read]
           produces: review
 ```
@@ -98,7 +113,11 @@ loop body's `needs` can point at a step later in its own body, and at
 runtime it resolves to *last round's* value (`undefined` on round one).
 Reading that possibly-undefined value has to happen in a `transform`
 function, not a `{{ }}` prompt placeholder — a placeholder throws on
-`undefined`, a plain TypeScript function just checks for it:
+`undefined`, a plain TypeScript function just checks for it. `fn:
+prepFeedback` resolves against a fixed path, `.yak/transforms.ts`
+relative to the run's `cwd` — see
+[standalone transform](./standalone-transform#why-transform-is-its-own-step-kind)
+for that mechanism in full:
 
 ```ts title=".yak/transforms.ts"
 export function prepFeedback(inputs: Record<string, unknown>): unknown {

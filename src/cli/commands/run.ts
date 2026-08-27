@@ -1,9 +1,11 @@
 import path from 'node:path'
+import { cancel, intro, log, outro } from '@clack/prompts'
 import { readJournal } from '../../engine/journal.js'
 import { executeWorkflowFile, readRunWorkflow, resumeRun } from '../../engine/run.js'
+import { failedStepsFromJournal, formatStepFailure } from '../../engine/status.js'
 import { openRequestStepIds, readPendingRequest, writeAnswer } from '../../engine/suspend.js'
 import type { AdapterId, RunIsolation } from '../../ir/types.js'
-import { promptForAnswer, terminalAsk } from '../interactive.js'
+import { clackFieldPrompt, lineFieldPrompt, promptForAnswer, PromptCancelledError } from '../interactive.js'
 
 const EX_SUSPEND = 78
 
@@ -26,25 +28,53 @@ async function answerOpenRequestsInteractively(runId: string, runDir: string): P
 
   const workflow = await readRunWorkflow(runDir)
   const orderedIds = workflow.steps.map((s) => s.id).filter((id) => openIds.has(id))
-  const ask = terminalAsk(process.stdin, process.stdout)
 
-  for (const stepId of orderedIds) {
-    const request = await readPendingRequest(runDir, stepId)
-    if (!request) continue
-    const answer = await promptForAnswer(request, ask, (text) => console.log(text))
-    await writeAnswer(runDir, stepId, answer)
+  // clack's widgets need a real TTY to read keystrokes from — piped or
+  // redirected stdin (scripts, CI) falls back to the plain line-based
+  // prompt instead of misreading answer bytes as keypresses.
+  const isRealTerminal = process.stdin.isTTY && process.stdout.isTTY
+  const { promptField, close } = isRealTerminal
+    ? { promptField: clackFieldPrompt(), close: () => {} }
+    : lineFieldPrompt(process.stdin, process.stdout)
+  const announce = isRealTerminal ? log.info : (text: string) => console.log(`\n${text}\n`)
+
+  if (isRealTerminal) intro('yak: answer pending gates')
+  try {
+    for (const stepId of orderedIds) {
+      const request = await readPendingRequest(runDir, stepId)
+      if (!request) continue
+      try {
+        const answer = await promptForAnswer(request, promptField, announce)
+        await writeAnswer(runDir, stepId, answer)
+      } catch (err) {
+        if (err instanceof PromptCancelledError) {
+          cancel(`"${stepId}" left unanswered — run still suspended`)
+          throw new Error(`answering "${stepId}" was cancelled`)
+        }
+        throw err
+      }
+    }
+  } finally {
+    close()
   }
+  if (isRealTerminal) outro('all gates answered')
 }
 
 export async function runCommand(workflowPath: string, opts: RunCommandOptions = {}): Promise<number> {
-  let result = await executeWorkflowFile(path.resolve(workflowPath), {
-    adapter: opts.adapter,
-    isolation: opts.isolation,
-  })
+  let result: Awaited<ReturnType<typeof executeWorkflowFile>>
+  try {
+    result = await executeWorkflowFile(path.resolve(workflowPath), {
+      adapter: opts.adapter,
+      isolation: opts.isolation,
+    })
 
-  while (opts.interactive && result.status === 'suspended') {
-    await answerOpenRequestsInteractively(result.runId, result.runDir)
-    result = await resumeRun(result.runId, { adapter: opts.adapter })
+    while (opts.interactive && result.status === 'suspended') {
+      await answerOpenRequestsInteractively(result.runId, result.runDir)
+      result = await resumeRun(result.runId, { adapter: opts.adapter })
+    }
+  } catch (err) {
+    console.error((err as Error).message)
+    return 1
   }
 
   if (result.status === 'ok') {
@@ -57,6 +87,10 @@ export async function runCommand(workflowPath: string, opts: RunCommandOptions =
     return EX_SUSPEND
   }
 
-  console.error(`run ${result.runId} finished: failed`)
+  console.error(`run ${result.runId} failed:`)
+  const events = await readJournal(result.runDir)
+  for (const { stepId, failure } of failedStepsFromJournal(events)) {
+    console.error(`  ${stepId}: ${formatStepFailure(failure)}`)
+  }
   return 1
 }

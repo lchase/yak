@@ -1,7 +1,13 @@
 import path from 'node:path'
 import { readJournal } from '../../engine/journal.js'
 import { defaultRunsDir, findLatestRunId, readRunWorkflow } from '../../engine/run.js'
-import { formatLoopBudget, loopStatusFromJournal, stepStatusesFromJournal } from '../../engine/status.js'
+import {
+  failedStepsFromJournal,
+  formatLoopBudget,
+  formatStepFailure,
+  loopStatusFromJournal,
+  stepStatusesFromJournal,
+} from '../../engine/status.js'
 
 export interface StatusOptions {
   runsDir?: string
@@ -25,6 +31,7 @@ export async function statusCommand(runId: string | undefined, opts: StatusOptio
 
   const events = await readJournal(runDir)
   const statuses = stepStatusesFromJournal(workflow.steps, events)
+  const failuresByStep = new Map(failedStepsFromJournal(events).map((f) => [f.stepId, f]))
 
   console.log(`run ${resolvedRunId}:`)
   for (const { stepId, status } of statuses) {
@@ -36,6 +43,9 @@ export async function statusCommand(runId: string | undefined, opts: StatusOptio
       const signal = detail.noProgressSignal !== undefined ? `, noProgress signal ${detail.noProgressSignal}` : ''
       console.log(`    ${formatLoopBudget(detail)}${signal}`)
     }
+
+    const failed = failuresByStep.get(stepId)
+    if (failed) console.log(`    ${formatStepFailure(failed.failure)}`)
   }
 
   return 0
