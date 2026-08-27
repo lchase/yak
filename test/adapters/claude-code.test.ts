@@ -269,6 +269,26 @@ describe('ClaudeCodeAdapter', () => {
     await expect(adapter.run(baseReq)).rejects.not.toBeInstanceOf(AgentStepFailedError)
   })
 
+  it('wraps an error thrown mid-stream (after query() itself returned) as a recoverable adapter-error', async () => {
+    // The real SDK does this for some structured-output-exhaustion cases:
+    // no `result` message ever arrives, the async iterator itself throws
+    // instead. Distinct from `query()` throwing outright (that's the
+    // "spawn failed" case above, deliberately left unwrapped) — this
+    // simulates the query having genuinely started before failing.
+    async function* genThenThrow(): AsyncGenerator<SDKMessage, void> {
+      throw new Error('Claude Code returned an error result: boom')
+    }
+    const { ClaudeCodeAdapter } = await import('../../src/adapters/claude-code.js')
+    queryMock.mockReturnValue(genThenThrow() as unknown as Query)
+
+    const adapter = new ClaudeCodeAdapter(runDir, 'code')
+
+    await expect(adapter.run(baseReq)).rejects.toMatchObject({
+      failure: { reason: 'adapter-error', recoverable: true },
+    })
+    await expect(adapter.run(baseReq)).rejects.toBeInstanceOf(AgentStepFailedError)
+  })
+
   describe('sandbox: docker (ticket 07/08)', () => {
     it('sets up a sandbox network and passes spawnClaudeCodeProcess when sandbox is given', async () => {
       const { ClaudeCodeAdapter } = await import('../../src/adapters/claude-code.js')

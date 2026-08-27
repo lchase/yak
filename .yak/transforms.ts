@@ -109,3 +109,58 @@ export function batchIssues(): unknown {
     },
   ]
 }
+
+/** yak cookbook: fan-out research + fan-in synthesis. A static, generic
+ * topic list — three unrelated subjects, deliberately unrelated to this
+ * repo itself, so the fixture demonstrates the fan-out/fan-in mechanics
+ * without depending on anything outside its own workflow. */
+export function researchTopics(): unknown {
+  return [
+    { topic: 'current adoption trends of the Rust programming language' },
+    { topic: 'recent advances in solid-state batteries for electric vehicles' },
+    { topic: 'the current state of quantum error correction research' },
+  ]
+}
+
+interface ResearchFinding {
+  topic: string
+  summary: string
+  sourceUrls: string[]
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** yak cookbook: fan-out research + fan-in synthesis. The fan-*in* half —
+ * an ordinary `needs` on the map step's produced array, no special step
+ * kind required — turning each item's findings into one self-contained
+ * HTML report. A failed item lands as `null` in the array (`map`'s
+ * default `onItemFailure: 'skip'`); this just leaves it out rather than
+ * failing the whole report. */
+export function renderResearchReport(inputs: Record<string, unknown>): unknown {
+  const findings = inputs['findings'] as (ResearchFinding | null)[]
+
+  const sections = findings
+    .filter((f): f is ResearchFinding => f !== null)
+    .map(
+      (f) => `  <section>
+    <h2>${escapeHtml(f.topic)}</h2>
+    <p>${escapeHtml(f.summary)}</p>
+    <ul>
+${f.sourceUrls.map((u) => `      <li><a href="${escapeHtml(u)}">${escapeHtml(u)}</a></li>`).join('\n')}
+    </ul>
+  </section>`,
+    )
+    .join('\n')
+
+  return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Research report</title></head>
+<body>
+<h1>Research report</h1>
+${sections}
+</body>
+</html>
+`
+}
