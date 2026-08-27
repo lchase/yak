@@ -93,4 +93,9 @@ program
     process.exitCode = await artifactsCommand(runId)
   })
 
-program.parse()
+try {
+  await program.parseAsync()
+} catch (err) {
+  console.error((err as Error).message)
+  process.exitCode = 1
+}
