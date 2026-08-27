@@ -4,7 +4,12 @@ steps:
   - id: implement
     agent:
       prompt: { file: "fixtures/release-demo/prompts/implement.md" }
-      schema: ImplementSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            summary: { type: string }
+          required: [summary]
       tools: [Read, Edit]
     produces: implementResult
 
@@ -24,7 +29,13 @@ steps:
   - id: release-gate
     needs: [implementResult, testResult]
     gate:
-      schema: ApprovalSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            decision: { type: string, enum: [approve, reject] }
+            notes: { type: string }
+          required: [decision]
       render: { file: "fixtures/release-demo/prompts/release-gate.md" }
     produces: releaseDecision
 

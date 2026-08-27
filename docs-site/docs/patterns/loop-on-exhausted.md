@@ -42,7 +42,12 @@ steps:
         - id: draft
           agent:
             prompt: { inline: "Write one short sentence describing what mergesort does." }
-            schema: DraftSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  sentence: { type: string }
+                required: [sentence]
           produces: draft
 ```
 

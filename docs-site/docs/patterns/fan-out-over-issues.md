@@ -35,7 +35,13 @@ steps:
   - id: triage
     agent:
       prompt: { file: "fixtures/batch-issues/prompts/triage.md" }
-      schema: TriageSchema
+      schema:
+        inline:
+          type: object
+          properties:
+            summary: { type: string }
+            confidence: { type: number }
+          required: [summary, confidence]
       tools: [Read, Glob, Write]
     produces: triage
 
@@ -60,7 +66,12 @@ steps:
               bugs, then read {{issues.file}} and {{issues.test}}. Fix the
               bug in {{issues.file}} (id: {{issues.id}}) so its test
               passes. Make only the edit needed for this one bug.
-          schema: ImplementSchema
+          schema:
+            inline:
+              type: object
+              properties:
+                summary: { type: string }
+              required: [summary]
           tools: [Read, Edit]
     produces: fixResults
 ```

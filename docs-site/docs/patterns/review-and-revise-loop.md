@@ -58,7 +58,12 @@ steps:
           needs: [priorFeedback]
           agent:
             prompt: { file: "fixtures/loop-demo/prompts/implement.md" }
-            schema: ImplementSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  summary: { type: string }
+                required: [summary]
             tools: [Read, Edit]
           produces: implementResult
 
@@ -79,7 +84,13 @@ steps:
           needs: [testResult]
           agent:
             prompt: { file: "fixtures/loop-demo/prompts/review.md" }
-            schema: ReviewSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  approved: { type: boolean }
+                  feedback: { type: string }
+                required: [approved, feedback]
             tools: [Read]
           produces: review
 ```
@@ -98,7 +109,11 @@ loop body's `needs` can point at a step later in its own body, and at
 runtime it resolves to *last round's* value (`undefined` on round one).
 Reading that possibly-undefined value has to happen in a `transform`
 function, not a `{{ }}` prompt placeholder — a placeholder throws on
-`undefined`, a plain TypeScript function just checks for it:
+`undefined`, a plain TypeScript function just checks for it. `fn:
+prepFeedback` resolves against a fixed path, `.yak/transforms.ts`
+relative to the run's `cwd` — see
+[standalone transform](./standalone-transform#why-transform-is-its-own-step-kind)
+for that mechanism in full:
 
 ```ts title=".yak/transforms.ts"
 export function prepFeedback(inputs: Record<string, unknown>): unknown {

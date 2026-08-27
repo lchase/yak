@@ -43,7 +43,12 @@ steps:
                 conversation, answer 1. Otherwise, recall the number you
                 answered on your previous turn and answer that number
                 plus one. Answer with only the number, nothing else.
-            schema: CountSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  n: { type: number }
+                required: [n]
           produces: count
 ```
 

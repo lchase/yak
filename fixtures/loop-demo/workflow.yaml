@@ -19,7 +19,12 @@ steps:
           needs: [priorFeedback]
           agent:
             prompt: { file: "fixtures/loop-demo/prompts/implement.md" }
-            schema: ImplementSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  summary: { type: string }
+                required: [summary]
             tools: [Read, Edit]
           produces: implementResult
 
@@ -40,6 +45,12 @@ steps:
           needs: [testResult]
           agent:
             prompt: { file: "fixtures/loop-demo/prompts/review.md" }
-            schema: ReviewSchema
+            schema:
+              inline:
+                type: object
+                properties:
+                  approved: { type: boolean }
+                  feedback: { type: string }
+                required: [approved, feedback]
             tools: [Read]
           produces: review
