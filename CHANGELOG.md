@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/lchase/yak/compare/yak-v0.3.0...yak-v0.3.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* yak --version reports the real version, not a hardcoded 0.0.1 ([#32](https://github.com/lchase/yak/issues/32)) ([0807dc7](https://github.com/lchase/yak/commit/0807dc7ad24b435b667bc7a541c541e462183f22))
+
 ## [0.3.0](https://github.com/lchase/yak/compare/yak-v0.2.1...yak-v0.3.0) (2026-09-07)
 
 
