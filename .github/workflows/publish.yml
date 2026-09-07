@@ -1,9 +1,10 @@
 name: Publish to npm
 
+# Dispatched by release-please.yml right after it cuts a release (and
+# available manually for recovery). Not triggered by the release tag
+# itself — release-please tags with GITHUB_TOKEN, which cannot trigger
+# workflows, and the tag is `yak-v*` anyway.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -14,6 +15,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-node@v4
         with:
