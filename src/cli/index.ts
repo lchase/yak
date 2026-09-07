@@ -9,6 +9,7 @@ import { runCommand } from './commands/run.js'
 import { statusCommand } from './commands/status.js'
 import { watchCommand } from './commands/watch.js'
 import { parseInputPairs } from './parse-input.js'
+import { readVersion } from './version.js'
 
 function requireAdapterId(value: string): AdapterId {
   if (value !== 'mock' && value !== 'claude-code') {
@@ -29,7 +30,7 @@ const program = new Command()
 program
   .name('yak')
   .description('An agentic workflow engine')
-  .version('0.0.1')
+  .version(readVersion())
 
 program
   .command('run')
