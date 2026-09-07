@@ -49,6 +49,29 @@ describe('validateWorkflow', () => {
     await expect(validateWorkflow(wf)).rejects.toThrow(/needs artifact "missing"/)
   })
 
+  it('accepts needs: [input] with no producer — the engine supplies it (yak#27)', async () => {
+    const wf = workflow([command({ id: 'a', needs: ['input'], produces: 'a-out' })])
+    await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+  })
+
+  it('accepts needs: [input] inside a loop body', async () => {
+    const wf = workflow([
+      {
+        kind: 'loop',
+        id: 'l',
+        until: 'true',
+        budget: { maxIterations: 1 },
+        body: [command({ id: 'a', needs: ['input'], produces: 'a-out' })],
+      } as Step,
+    ])
+    await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+  })
+
+  it('rejects a step that tries to produce the reserved "input" artifact', async () => {
+    const wf = workflow([command({ id: 'a', produces: 'input' })])
+    await expect(validateWorkflow(wf)).rejects.toThrow(/reserved artifact name/)
+  })
+
   it('rejects cycles', async () => {
     const wf = workflow([
       command({ id: 'a', needs: ['b-out'], produces: 'a-out' }),

@@ -110,7 +110,7 @@ const rawStepSchema: z.ZodType<RawStep> = z.lazy(() =>
 const rawWorkflowSchema = z.object({
   name: z.string(),
   version: z.string(),
-  inputSchema: z.string().optional(),
+  inputSchema: rawSchemaSpecSchema.optional(),
   steps: z.array(rawStepSchema),
 })
 

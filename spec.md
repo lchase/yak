@@ -721,9 +721,17 @@ export type Step =
 export interface Workflow {
   name: string
   version: string
-  inputSchema?: string
+  inputSchema?: string | { inline: JSONSchema }   // same SchemaSpec shape as
+                                                   // AgentStep/GateStep.schema
   steps: Step[]
 }
+
+// `input` is a reserved artifact name. `yak run --input k=v` (repeatable)
+// is parsed to an object, validated against `inputSchema` when one is
+// declared, and written as `artifacts/input.json` before any step runs —
+// so any step may `needs: [input]` without a producer, and no step may
+// `produces: input`. Its hash feeds downstream cache keys like any other
+// artifact.
 
 export interface StepFailure {
   reason:

@@ -13,6 +13,9 @@ export interface RunCommandOptions {
   adapter?: AdapterId
   interactive?: boolean
   isolation?: RunIsolation
+  /** `yak run --input key=value` map (yak#27), validated against the
+   * workflow's `inputSchema`. */
+  input?: Record<string, unknown>
 }
 
 /**
@@ -66,6 +69,7 @@ export async function runCommand(workflowPath: string, opts: RunCommandOptions =
     result = await executeWorkflowFile(path.resolve(workflowPath), {
       adapter: opts.adapter,
       isolation: opts.isolation,
+      input: opts.input,
     })
 
     while (opts.interactive && result.status === 'suspended') {

@@ -38,6 +38,11 @@ export interface ScheduleContext {
    * populated by `resumeRun` from a `pending/<step>.answer.json` it just
    * validated, consumed once by `runLoopStep`. */
   loopContinuations?: Map<StepId, { action: 'continue' | 'abort'; addIterations?: number }>
+  /** Artifact hashes known before any step runs — the reserved `input`
+   * artifact (yak#27), written by the engine from `yak run --input`.
+   * Seeded into `artifactHashes` so `needs: ['input']` resolves and the
+   * input's hash participates in downstream cache keys. */
+  seedArtifactHashes?: Map<ArtifactName, string>
 }
 
 /** Ticket 09: `mock` is fixture-driven (keyed by workflow name + step id
@@ -143,7 +148,7 @@ export async function runEligibleSteps(
   const completed = new Set<StepId>()
   const failedSteps = new Set<StepId>()
   const inFlight = new Map<StepId, Promise<'ok' | 'failed' | 'suspended'>>()
-  const artifactHashes = new Map<ArtifactName, string>()
+  const artifactHashes = new Map<ArtifactName, string>(ctx.seedArtifactHashes ?? [])
   let failed = false
   let suspended = false
 

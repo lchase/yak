@@ -1,20 +1,30 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { z } from 'zod'
 import { flattenSteps } from '../ir/graph.js'
 import { loadWorkflowYaml } from '../ir/load.js'
 import { normalizeWorkflow } from '../ir/normalize.js'
-import type { AdapterId, RunIsolation, StepId, Workflow } from '../ir/types.js'
+import { INPUT_ARTIFACT } from '../ir/types.js'
+import type { AdapterId, ArtifactName, RunIsolation, StepId, Workflow } from '../ir/types.js'
 import { validateWorkflow } from '../ir/validate.js'
 import { completeGate } from '../steps/gate.js'
 import { resolveSchemaSpec } from '../ir/schema-resolve.js'
 import { createWorktree } from '../util/git.js'
 import { sha256 } from '../util/hash.js'
+import { readArtifactRawOrUndefined, writeArtifact } from './artifacts.js'
 import { appendJournalEvent, completedStepsFromJournal, readJournal } from './journal.js'
 import { runEligibleSteps } from './scheduler.js'
 import { openRequestStepIds, resolveAnswer } from './suspend.js'
 
 const DEFAULT_ADAPTER: AdapterId = 'claude-code'
+
+/** A `yak run --input` value that does not satisfy the workflow's
+ * `inputSchema` — user error, surfaced before the run directory is
+ * created, exactly like a malformed workflow. */
+export class InputValidationError extends Error {
+  override name = 'InputValidationError'
+}
 
 export interface ExecuteOptions {
   runsDir?: string
@@ -22,6 +32,48 @@ export interface ExecuteOptions {
   cacheDir?: string
   adapter?: AdapterId
   isolation?: RunIsolation
+  /** The `yak run --input key=value` map (yak#27). Validated against the
+   * workflow's `inputSchema` and written as the reserved `input` artifact. */
+  input?: Record<string, unknown>
+}
+
+/**
+ * Resolves the run input (yak#27) before any disk state exists. Returns
+ * `undefined` when the workflow neither declares an `inputSchema` nor has
+ * a step that `needs: ['input']` and no `--input` was passed — nothing to
+ * write. Otherwise returns the value to store as the `input` artifact,
+ * schema-validated (and coerced) when an `inputSchema` is declared.
+ */
+async function resolveRunInput(
+  workflow: Workflow,
+  rawInput: Record<string, unknown> | undefined,
+  cwd: string,
+): Promise<unknown | undefined> {
+  const stepNeedsInput = flattenSteps(workflow.steps).some((s) => (s.needs ?? []).includes(INPUT_ARTIFACT))
+  if (rawInput === undefined && workflow.inputSchema === undefined && !stepNeedsInput) {
+    return undefined
+  }
+
+  const provided = rawInput ?? {}
+  if (workflow.inputSchema === undefined) return provided
+
+  const schema = await resolveSchemaSpec(workflow.inputSchema, cwd)
+  const parsed = schema.safeParse(provided)
+  if (!parsed.success) {
+    throw new InputValidationError(
+      `--input does not satisfy the workflow's inputSchema:\n${parsed.errorSummary}`,
+    )
+  }
+  return parsed.data
+}
+
+/** Recompute the `input` artifact's hash on resume so it seeds cache keys
+ * identically to the original run — the on-disk file is exactly what
+ * `writeArtifact` serialized, so hashing its bytes matches. */
+async function seedInputHash(runDir: string): Promise<Map<ArtifactName, string> | undefined> {
+  const value = await readArtifactRawOrUndefined(runDir, INPUT_ARTIFACT)
+  if (value === undefined) return undefined
+  return new Map([[INPUT_ARTIFACT, sha256(JSON.stringify(value, null, 2))]])
 }
 
 export interface ExecuteResult {
@@ -70,19 +122,40 @@ export async function executeWorkflowFile(
   const workflow = normalizeWorkflow(raw)
   await validateWorkflow(workflow, cwd, isolation)
 
+  // yak#27: resolve + validate `--input` before any run state exists.
+  const inputValue = await resolveRunInput(workflow, opts.input, cwd)
+
   const runId = generateRunId()
   const runDir = path.join(runsDir, runId)
   await mkdir(runDir, { recursive: true })
   await writeFile(path.join(runDir, 'workflow.json'), JSON.stringify(workflow, null, 2), 'utf8')
 
+  // The `input` artifact file is written before `run.started` so its hash
+  // can go on that event; its `artifact.written` journal line follows.
+  let seedArtifactHashes: Map<ArtifactName, string> | undefined
+  let inputWritten: Awaited<ReturnType<typeof writeArtifact>> | undefined
+  if (inputValue !== undefined) {
+    inputWritten = await writeArtifact(runDir, INPUT_ARTIFACT, inputValue, z.unknown())
+    seedArtifactHashes = new Map([[INPUT_ARTIFACT, inputWritten.hash]])
+  }
+
   await appendJournalEvent(runDir, runId, {
     t: 'run.started',
     runId,
     workflow: workflow.name,
-    inputHash: sha256(JSON.stringify(workflow)),
+    inputHash: inputWritten?.hash ?? sha256(JSON.stringify(workflow)),
     adapter,
     isolation,
   })
+
+  if (inputWritten) {
+    await appendJournalEvent(runDir, runId, {
+      t: 'artifact.written',
+      name: inputWritten.name,
+      hash: inputWritten.hash,
+      bytes: inputWritten.bytes,
+    })
+  }
 
   // `runsDir`/`cacheDir` stay anchored to the original repo regardless of
   // isolation — only the step-execution cwd swaps into the worktree.
@@ -102,7 +175,14 @@ export async function executeWorkflowFile(
     stepCwd = worktreePath
   }
 
-  const status = await runEligibleSteps(workflow, { runId, runDir, cwd: stepCwd, cacheDir, adapter })
+  const status = await runEligibleSteps(workflow, {
+    runId,
+    runDir,
+    cwd: stepCwd,
+    cacheDir,
+    adapter,
+    seedArtifactHashes,
+  })
 
   await appendJournalEvent(runDir, runId, { t: 'run.finished', status })
 
@@ -228,9 +308,21 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
   }
   const stepCwd = persistedIsolation === 'worktree' ? worktreePathFor(runsDir, runId) : cwd
 
+  // yak#27: re-seed the `input` artifact hash so resumed steps recompute
+  // the same cache keys the original run did.
+  const seedArtifactHashes = await seedInputHash(runDir)
+
   const status = await runEligibleSteps(
     workflow,
-    { runId, runDir, cwd: stepCwd, cacheDir, adapter: persistedAdapter, loopContinuations },
+    {
+      runId,
+      runDir,
+      cwd: stepCwd,
+      cacheDir,
+      adapter: persistedAdapter,
+      loopContinuations,
+      seedArtifactHashes,
+    },
     resumeState,
   )
 

@@ -85,10 +85,17 @@ export type Step =
   | AgentStep | CommandStep | TransformStep
   | GateStep | MapStep | LoopStep
 
+/** The reserved artifact name every workflow may list in `needs`. The
+ * engine writes it at run start from `yak run --input`, validated against
+ * `Workflow.inputSchema` when one is declared. No step may `produces` it. */
+export const INPUT_ARTIFACT: ArtifactName = 'input'
+
 export interface Workflow {
   name: string
   version: string
-  inputSchema?: string
+  /** Schema the `--input` value is checked against — a key in
+   * `.yak/schemas.ts` (Zod), or an inline JSON Schema. */
+  inputSchema?: string | { inline: JSONSchema }
   steps: Step[]
 }
 
