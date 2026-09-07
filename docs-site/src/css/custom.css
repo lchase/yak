@@ -159,6 +159,15 @@
   font-weight: 600;
 }
 
+/* Shrink the category collapse caret to roughly match the active-page
+ * chevron above — Infima's default is an oversized 1.25rem glyph. */
+.menu__link--sublist-caret::after,
+.menu__caret::before {
+  min-width: 0.85rem;
+  height: 0.85rem;
+  background-size: 0.85rem 0.85rem;
+}
+
 .menu__list-item-collapsible:hover {
   background: transparent;
 }
