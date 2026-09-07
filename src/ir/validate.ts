@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { extractTemplateRoots } from '../expr/template.js'
 import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps } from './graph.js'
 import { describeSchemaSpec, resolveSchemaSpec, type SchemaSpec } from './schema-resolve.js'
+import { INPUT_ARTIFACT } from './types.js'
 import type { ArtifactName, Expr, GateStep, RunIsolation, Step, StepId, Workflow } from './types.js'
 
 export class WorkflowValidationError extends Error {}
@@ -50,6 +51,7 @@ export async function validateWorkflow(
   checkKnownKinds(flatSteps)
   checkDuplicateIds(flatSteps)
   const producerOf = buildProducerMap(workflow.steps)
+  checkReservedArtifactNames(flatSteps)
   checkNeedsSatisfied(workflow.steps, producerOf)
   checkNoCycles(workflow.steps, producerOf)
   checkExitCodeReads(workflow.steps, producerOf)
@@ -180,9 +182,23 @@ function checkDuplicateIds(steps: Step[]): void {
  * scope's producer map — an artifact produced only inside a loop is never
  * visible outside it, so the outer scope passed to a nested loop is never
  * widened with that loop's own locals. */
+/** `input` (spec §13) is the one artifact the engine supplies itself, from
+ * `yak run --input` — no step produces it, so a step may `needs` it without
+ * a producer, and no step may claim it as its own `produces`. */
+function checkReservedArtifactNames(steps: Step[]): void {
+  for (const step of steps) {
+    if (step.produces === INPUT_ARTIFACT) {
+      throw new WorkflowValidationError(
+        `step "${step.id}": "${INPUT_ARTIFACT}" is a reserved artifact name (the run input) — a step cannot produce it`,
+      )
+    }
+  }
+}
+
 function checkNeedsSatisfied(steps: Step[], producerOf: Map<ArtifactName, StepId>): void {
   for (const step of steps) {
     for (const need of step.needs ?? []) {
+      if (need === INPUT_ARTIFACT) continue
       if (!producerOf.has(need)) {
         throw new WorkflowValidationError(
           `step "${step.id}": needs artifact "${need}" but no step produces it`,

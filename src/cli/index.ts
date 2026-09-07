@@ -8,6 +8,7 @@ import { resumeCommand } from './commands/resume.js'
 import { runCommand } from './commands/run.js'
 import { statusCommand } from './commands/status.js'
 import { watchCommand } from './commands/watch.js'
+import { parseInputPairs } from './parse-input.js'
 
 function requireAdapterId(value: string): AdapterId {
   if (value !== 'mock' && value !== 'claude-code') {
@@ -37,13 +38,23 @@ program
   .option('--adapter <adapter>', 'agent adapter to use', 'claude-code')
   .option('--interactive', 'prompt inline for gate answers instead of exiting to resume later', false)
   .option('--isolation <mode>', 'run inside a fresh git worktree ("worktree") or the plain cwd ("none")', 'none')
-  .action(async (workflow: string, options: { adapter: string; interactive: boolean; isolation: string }) => {
-    process.exitCode = await runCommand(workflow, {
-      adapter: requireAdapterId(options.adapter),
-      interactive: options.interactive,
-      isolation: requireIsolation(options.isolation),
-    })
-  })
+  .option(
+    '--input <pair...>',
+    'workflow input as key=value, repeatable — validated against the workflow inputSchema',
+  )
+  .action(
+    async (
+      workflow: string,
+      options: { adapter: string; interactive: boolean; isolation: string; input?: string[] },
+    ) => {
+      process.exitCode = await runCommand(workflow, {
+        adapter: requireAdapterId(options.adapter),
+        interactive: options.interactive,
+        isolation: requireIsolation(options.isolation),
+        input: parseInputPairs(options.input),
+      })
+    },
+  )
 
 program
   .command('resume')
