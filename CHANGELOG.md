@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/lchase/yak/compare/yak-v0.2.1...yak-v0.3.0) (2026-09-07)
+
+
+### Features
+
+* yak run --input — pass workflow input at launch ([#28](https://github.com/lchase/yak/issues/28)) ([1836fe0](https://github.com/lchase/yak/commit/1836fe04b06fef8c95a73a9c514de8c678e2c630))
+
 ## [0.2.1](https://github.com/lchase/yak/compare/yak-v0.2.0...yak-v0.2.1) (2026-08-27)
 
 
