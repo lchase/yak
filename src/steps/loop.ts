@@ -81,17 +81,44 @@ export async function runLoopStep(step: LoopStep, ctx: LoopRunContext): Promise<
   }
 
   const resumeFrom = ctx.loopContinuation?.action === 'continue' ? await buildResumeFrom(step, ctx) : undefined
-  const status = await runLoopBody(step, ctx, resumeFrom)
+  const result = await runLoopBody(step, ctx, resumeFrom)
 
   // `'failed'` already got its own, more specific `step.failed` journaled
   // at the point of failure (body-step hard failure or onExhausted: 'fail')
   // — this wrapper only needs to cover the success case.
-  if (status === 'ok') {
-    await appendJournalEvent(ctx.runDir, ctx.runId, { t: 'step.completed', stepId: step.id, cached: false })
+  if (result.status === 'ok') {
+    // yak#35: when the loop declares `produces`, write its own artifact once
+    // the loop settles — the final `until`-context object (the last
+    // iteration's body artifacts, keyed by name). Without it a step outside
+    // the loop can't `needs` the loop and so can't be ordered after it.
+    let artifact: { name: ArtifactName; hash: string } | undefined
+    if (step.produces) {
+      const written = await writeArtifact(ctx.runDir, step.produces, result.untilContext, z.unknown())
+      artifact = { name: step.produces, hash: written.hash }
+      // Same map instance the scheduler threads through every step — seeds
+      // the loop's artifact hash into downstream steps' cache keys.
+      ctx.outerArtifactHashes.set(step.produces, written.hash)
+      await appendJournalEvent(ctx.runDir, ctx.runId, {
+        t: 'artifact.written',
+        name: step.produces,
+        hash: written.hash,
+        bytes: written.bytes,
+      })
+    }
+    await appendJournalEvent(ctx.runDir, ctx.runId, {
+      t: 'step.completed',
+      stepId: step.id,
+      ...(artifact ? { artifact: artifact.name, artifactHash: artifact.hash } : {}),
+      cached: false,
+    })
   }
 
-  return status
+  return result.status
 }
+
+type LoopBodyResult =
+  | { status: 'ok'; untilContext: Record<string, unknown> }
+  | { status: 'failed' | 'suspended' }
 
 /** M4 ticket 06: reconstructs where a previously-suspended-for-exhaustion
  * loop left off, from the journal alone — the same "resume-correct for
@@ -130,7 +157,7 @@ async function runLoopBody(
   step: LoopStep,
   ctx: LoopRunContext,
   resumeFrom?: ResumeFrom,
-): Promise<'ok' | 'failed' | 'suspended'> {
+): Promise<LoopBodyResult> {
   const localProducerOf = buildProducerMap(step.body)
   const bodyOrderIndex = new Map(step.body.map((s, i) => [s.id, i]))
   const bodyStepIds = new Set(step.body.map((s) => s.id))
@@ -180,13 +207,13 @@ async function runLoopBody(
             recoverable: false,
           },
         })
-        return 'failed'
+        return { status: 'failed' }
       }
       throw err
     }
 
     const untilContext = Object.fromEntries(thisValues)
-    if (await evalExpr(step.until, untilContext, ctx.cwd)) return 'ok'
+    if (await evalExpr(step.until, untilContext, ctx.cwd)) return { status: 'ok', untilContext }
 
     let tripped: 'maxIterations' | 'maxTokens' | 'noProgress' | undefined
     if (step.budget.noProgress) {
@@ -209,7 +236,12 @@ async function runLoopBody(
       if (tokensTotal >= step.budget.maxTokens) tripped = 'maxTokens'
     }
 
-    if (tripped) return await handleExhausted(step, ctx, iteration, tripped)
+    if (tripped) {
+      const outcome = await handleExhausted(step, ctx, iteration, tripped)
+      // `onExhausted: 'continue'` treats exhaustion as success — the loop's
+      // artifact is the last iteration's context, same as a clean `until`.
+      return outcome === 'ok' ? { status: 'ok', untilContext } : { status: outcome }
+    }
 
     priorValues = thisValues
     priorHashes = thisHashes
