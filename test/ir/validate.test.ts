@@ -84,12 +84,12 @@ describe('validateWorkflow', () => {
     const loop: LoopStep = {
       id: 'retry',
       kind: 'loop',
-      needs: ['test-result'],
+      needs: ['testResult'],
       body: [],
-      until: 'test-result.exitCode == 0',
+      until: 'testResult.exitCode == 0',
       budget: { maxIterations: 3 },
     }
-    const wf = workflow([command({ id: 'test', produces: 'test-result' }), loop])
+    const wf = workflow([command({ id: 'test', produces: 'testResult' }), loop])
     await expect(validateWorkflow(wf)).rejects.toThrow(/failOn: 'exitCode'/)
   })
 
@@ -97,16 +97,78 @@ describe('validateWorkflow', () => {
     const loop: LoopStep = {
       id: 'retry',
       kind: 'loop',
-      needs: ['test-result'],
+      needs: ['testResult'],
       body: [],
-      until: 'test-result.exitCode == 0',
+      until: 'testResult.exitCode == 0',
       budget: { maxIterations: 3 },
     }
     const wf = workflow([
-      command({ id: 'test', produces: 'test-result', failOn: 'never' }),
+      command({ id: 'test', produces: 'testResult', failOn: 'never' }),
       loop,
     ])
     await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+  })
+
+  describe('yak#36: expression refs to non-identifier artifact names', () => {
+    it('rejects skipIf referencing a hyphenated artifact name (jexl reads it as subtraction)', async () => {
+      const wf = workflow([
+        command({ id: 'verify', produces: 'verify-result' }),
+        command({
+          id: 'checkpoint',
+          needs: ['verify-result'],
+          skipIf: 'verify-result.exitCode == 0',
+        }),
+      ])
+      await expect(validateWorkflow(wf)).rejects.toThrow(
+        /skipIf references artifact "verify-result".*Rename it to an identifier \(e\.g\. "verifyResult"\)/s,
+      )
+    })
+
+    it("rejects a loop's until referencing a hyphenated body artifact", async () => {
+      const loop: LoopStep = {
+        id: 'retry',
+        kind: 'loop',
+        body: [command({ id: 'run-tests', produces: 'test-result', failOn: 'never' })],
+        until: 'test-result.exitCode == 0',
+        budget: { maxIterations: 3 },
+      }
+      await expect(validateWorkflow(workflow([loop]))).rejects.toThrow(
+        /until references artifact "test-result"/,
+      )
+    })
+
+    it("rejects a loop's noProgress.signal referencing a hyphenated body artifact", async () => {
+      const loop: LoopStep = {
+        id: 'retry',
+        kind: 'loop',
+        body: [command({ id: 'run-tests', produces: 'test-result', failOn: 'never' })],
+        until: 'testResult.exitCode == 0',
+        budget: { maxIterations: 3, noProgress: { signal: 'test-result.exitCode', rounds: 2 } },
+      }
+      await expect(validateWorkflow(workflow([loop]))).rejects.toThrow(
+        /noProgress\.signal references artifact "test-result"/,
+      )
+    })
+
+    it('accepts an identifier-safe artifact name referenced in an expression', async () => {
+      const wf = workflow([
+        command({ id: 'verify', produces: 'verifyResult', failOn: 'never' }),
+        command({
+          id: 'checkpoint',
+          needs: ['verifyResult'],
+          skipIf: 'verifyResult.exitCode == 0',
+        }),
+      ])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
+
+    it('does not flag a hyphenated artifact name that no expression references', async () => {
+      const wf = workflow([
+        command({ id: 'a', produces: 'a-out' }),
+        command({ id: 'b', needs: ['a-out'], produces: 'b-out', skipIf: 'true' }),
+      ])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
   })
 
   describe('ticket 07: isolation: "none" write-race guardrail', () => {

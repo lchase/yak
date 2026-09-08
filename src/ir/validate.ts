@@ -54,6 +54,7 @@ export async function validateWorkflow(
   checkReservedArtifactNames(flatSteps)
   checkNeedsSatisfied(workflow.steps, producerOf)
   checkNoCycles(workflow.steps, producerOf)
+  checkExprArtifactIdentifiers(workflow.steps, producerOf)
   checkExitCodeReads(workflow.steps, producerOf)
   checkAgentToolNames(flatSteps)
   await checkAgentSchemaKeys(flatSteps, cwd)
@@ -235,6 +236,64 @@ function checkNoCycles(steps: Step[], producerOf: Map<ArtifactName, StepId>): vo
   }
 
   for (const step of steps) visit(step, [])
+}
+
+const JEXL_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+
+/** yak#36: `skipIf` / loop `until` / `noProgress.signal` are jexl expressions.
+ * jexl has no notion of a hyphenated identifier — it parses `verify-result`
+ * as `verify - result` (subtraction), silently, against `undefined` operands.
+ * A step whose expression textually references a declared artifact whose name
+ * isn't a valid jexl identifier is therefore always a logic bug: the
+ * expression can never see that artifact (the gate never skips, the loop
+ * never trips). Reject it at load time with the rename it needs, rather than
+ * letting the step misbehave with no error at runtime. */
+function checkExprArtifactIdentifiers(
+  steps: Step[],
+  producerOf: Map<ArtifactName, StepId>,
+): void {
+  for (const step of steps) {
+    if (step.skipIf !== undefined) checkExprRefs(step.id, 'skipIf', step.skipIf, producerOf)
+    if (step.kind === 'loop') {
+      const localProducerOf = new Map([...producerOf, ...buildProducerMap(step.body)])
+      checkExprRefs(step.id, 'until', step.until, localProducerOf)
+      if (step.budget.noProgress) {
+        checkExprRefs(step.id, 'noProgress.signal', step.budget.noProgress.signal, localProducerOf)
+      }
+      checkExprArtifactIdentifiers(step.body, localProducerOf)
+    }
+    if (step.kind === 'map') checkExprArtifactIdentifiers([step.step], producerOf)
+  }
+}
+
+function checkExprRefs(
+  stepId: StepId,
+  field: string,
+  expr: Expr,
+  producerOf: Map<ArtifactName, StepId>,
+): void {
+  if (typeof expr !== 'string') return
+  for (const name of producerOf.keys()) {
+    if (JEXL_IDENTIFIER.test(name)) continue
+    const bounded = new RegExp(`(?<![A-Za-z0-9_$])${escapeRegExp(name)}(?![A-Za-z0-9_$])`)
+    if (!bounded.test(expr)) continue
+    throw new WorkflowValidationError(
+      `step "${stepId}": ${field} references artifact "${name}", but "${name}" is not a valid jexl ` +
+        `identifier — jexl reads it as an expression ("a-b" parses as "a minus b"), not a name, so the ` +
+        `artifact is invisible to ${field}. Rename it to an identifier (e.g. "${toIdentifier(name)}").`,
+    )
+  }
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function toIdentifier(name: string): string {
+  const camel = name.replace(/[^A-Za-z0-9]+([A-Za-z0-9])?/g, (_, c?: string) =>
+    c ? c.toUpperCase() : '',
+  )
+  return JEXL_IDENTIFIER.test(camel) ? camel : `a${camel}`
 }
 
 /**
