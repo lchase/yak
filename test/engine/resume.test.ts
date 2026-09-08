@@ -156,5 +156,9 @@ describe('resume — acceptance behavior #3', () => {
     // install/lint artifacts untouched by resume
     const lintArtifact = JSON.parse(await readFile(path.join(runDir, 'artifacts', 'lint-result.json'), 'utf8'))
     expect(lintArtifact.stdout.trim()).toBe('linted')
+
+    // yak#24: resume records its own pid so `yak cancel` can find it.
+    const resumed = events.find((e) => e.t === 'run.resumed')
+    expect(resumed?.t === 'run.resumed' && resumed.pid).toBe(process.pid)
   })
 })

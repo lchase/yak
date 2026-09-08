@@ -170,6 +170,7 @@ export async function executeWorkflowFile(
     inputHash: inputWritten?.hash ?? sha256(JSON.stringify(workflow)),
     adapter,
     isolation,
+    pid: process.pid,
     ...(opts.tag !== undefined ? { tag: opts.tag } : {}),
   })
 
@@ -307,6 +308,10 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
   const runDir = path.join(runsDir, runId)
 
   const workflow = await readRunWorkflow(runDir)
+
+  // yak#24: record this resume process's pid so `yak cancel` signals the
+  // live process, not the (long-gone) one from the original `yak run`.
+  await appendJournalEvent(runDir, runId, { t: 'run.resumed', pid: process.pid })
 
   let events = await readJournal(runDir)
   const loopContinuations = await resolveOpenRequests(runId, runDir, workflow, cwd, events)

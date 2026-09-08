@@ -119,6 +119,33 @@ run 2026-08-20T04-42-18Z-24d8 still has unresolved pending requests:
     decision: Required
 ```
 
+## `cancel`
+
+Terminates a live run from outside the process that launched it — for a
+supervisor (a reconciler, a batch orchestrator, or a human who started a
+detached `yak run` and walked away) that needs a supported kill instead of
+tracking pids and calling `kill(2)`.
+
+```bash
+npx tsx src/cli/index.ts cancel 2026-08-20T04-42-18Z-24d8
+```
+
+```
+run 2026-08-20T04-42-18Z-24d8 cancelled
+```
+
+It SIGTERMs the run's process group (the agent subprocess included),
+escalates to SIGKILL if the tree hasn't exited after a grace period, then
+journals a terminal `run.finished { status: 'failed', reason: 'cancelled' }`
+so `yak pending`, `yak status`, `yak watch`, and any other journal reader
+see a clean terminal state. The isolation worktree and its `yak/<run-id>`
+branch are left in place for normal cleanup.
+
+`cancel` is idempotent: a run that has already finished is reported and
+left untouched. A run whose recorded process is already gone (a stale pid,
+or a journal written before this feature landed) still gets the terminal
+`run.finished` written — that is the point of a supported cancel.
+
 ## `graph`
 
 Emits a workflow's DAG as Mermaid, straight to stdout — paste it into

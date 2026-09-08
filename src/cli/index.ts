@@ -2,6 +2,7 @@
 import { Command } from 'commander'
 import type { AdapterId, RunIsolation } from '../ir/types.js'
 import { artifactsCommand } from './commands/artifacts.js'
+import { cancelCommand } from './commands/cancel.js'
 import { graphCommand } from './commands/graph.js'
 import { pendingCommand } from './commands/pending.js'
 import { resumeCommand } from './commands/resume.js'
@@ -72,6 +73,14 @@ program
   .option('--adapter <adapter>', 'must match the adapter the run started with, if given')
   .action(async (runId: string, options: { adapter?: string }) => {
     process.exitCode = await resumeCommand(runId, options.adapter ? requireAdapterId(options.adapter) : undefined)
+  })
+
+program
+  .command('cancel')
+  .description("Terminate a live run and journal a clean 'cancelled' terminal state")
+  .argument('<run-id>', 'id of the run to cancel')
+  .action(async (runId: string) => {
+    process.exitCode = await cancelCommand(runId)
   })
 
 program
