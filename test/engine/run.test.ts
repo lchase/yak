@@ -127,4 +127,33 @@ describe('single-step command run', () => {
     if (startedUntagged?.t !== 'run.started') throw new Error('unreachable')
     expect('tag' in startedUntagged).toBe(false)
   })
+
+  it('fires onStart after run.started and before any step runs (yak#23)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
+    const workflowPath = await writeWorkflow(
+      dir,
+      [
+        'name: hooked',
+        'version: "1"',
+        'steps:',
+        '  - id: greet',
+        '    command: { run: "echo hi" }',
+        '    produces: greeting',
+      ].join('\n'),
+    )
+
+    let seen: { runId: string; worktreeBranch?: string } | undefined
+    let journalAtStart: string[] = []
+    const result = await executeWorkflowFile(workflowPath, {
+      runsDir: path.join(dir, '.runs'),
+      onStart: async (info) => {
+        seen = info
+        journalAtStart = (await readJournal(info.runDir)).map((e) => e.t)
+      },
+    })
+
+    expect(seen?.runId).toBe(result.runId)
+    expect(seen?.worktreeBranch).toBeUndefined()
+    expect(journalAtStart).toEqual(['run.started'])
+  })
 })

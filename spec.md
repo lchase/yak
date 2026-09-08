@@ -442,6 +442,8 @@ yak replay <run-id> --from <step-id>
 
 `yak pending` is the daily-driver command: one place that answers "what is waiting on me?"
 
+`yak run` prints `run <run-id> started` (and, under `--isolation worktree`, the branch `yak/<run-id>`) to **stderr** the moment `run.started` is journalled, before any step runs — so an out-of-process launcher can capture the id without waiting for a terminal state. stdout carries only the terminal-state line.
+
 ---
 
 ## 7. Reference workflow (the acceptance test)
