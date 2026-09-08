@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/lchase/yak/compare/yak-v0.4.0...yak-v0.4.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* reject expressions that misread a non-identifier artifact name ([#36](https://github.com/lchase/yak/issues/36)) ([#40](https://github.com/lchase/yak/issues/40)) ([9d2ae60](https://github.com/lchase/yak/commit/9d2ae606cc353b7c3c02b5e428d9aa4212db0733))
+
 ## [0.4.0](https://github.com/lchase/yak/compare/yak-v0.3.1...yak-v0.4.0) (2026-09-08)
 
 
