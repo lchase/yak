@@ -36,6 +36,18 @@ describe('yak pending (CLI)', () => {
     expect(logs[1]).toContain('approve (gate): Approve this change?')
   })
 
+  it('echoes the run --tag on the suspended-run line (yak#22)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'yak-pending-'))
+    const runsDir = path.join(dir, '.runs')
+    const result = await executeWorkflowFile(GATE_SUSPEND, { runsDir, tag: 'issue-42' })
+    expect(result.status).toBe('suspended')
+
+    const exitCode = await pendingCommand({ runsDir })
+
+    expect(exitCode).toBe(0)
+    expect(logs[0]).toBe(`run ${result.runId} suspended (tag: issue-42):`)
+  })
+
   it('does not list a finished run (ticket 03: journal, not file presence)', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'yak-pending-'))
     const runsDir = path.join(dir, '.runs')

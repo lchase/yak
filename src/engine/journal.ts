@@ -24,6 +24,13 @@ export async function readJournal(runDir: string): Promise<JournalEnvelope[]> {
     .map((line) => JSON.parse(line) as JournalEnvelope)
 }
 
+/** yak#22: the caller-supplied `--tag` carried on `run.started`, or
+ * `undefined` when the run was launched without one. */
+export function runTagFromJournal(events: JournalEnvelope[]): string | undefined {
+  const started = events.find((e) => e.t === 'run.started')
+  return started?.t === 'run.started' ? started.tag : undefined
+}
+
 /** A step whose most recent journal state, as of replay, is `step.completed`. */
 export interface ReplayedStep {
   stepId: StepId

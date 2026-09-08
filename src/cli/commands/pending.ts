@@ -1,6 +1,6 @@
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
-import { readJournal } from '../../engine/journal.js'
+import { readJournal, runTagFromJournal } from '../../engine/journal.js'
 import { defaultRunsDir } from '../../engine/run.js'
 import { openRequestStepIds, readPendingRequest } from '../../engine/suspend.js'
 
@@ -30,7 +30,8 @@ export async function pendingCommand(opts: PendingOptions = {}): Promise<number>
     if (!last || last.t !== 'run.finished' || last.status !== 'suspended') continue
 
     anyPending = true
-    console.log(`run ${runId} suspended:`)
+    const tag = runTagFromJournal(events)
+    console.log(`run ${runId} suspended${tag !== undefined ? ` (tag: ${tag})` : ''}:`)
 
     const openIds = openRequestStepIds(events)
     if (openIds.length === 0) {

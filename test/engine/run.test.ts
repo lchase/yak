@@ -100,4 +100,31 @@ describe('single-step command run', () => {
     )
     expect(artifact.exitCode).toBe(2)
   })
+
+  it('stores --tag verbatim on run.started, and omits the field without one (yak#22)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
+    const workflowPath = await writeWorkflow(
+      dir,
+      [
+        'name: tagged',
+        'version: "1"',
+        'steps:',
+        '  - id: greet',
+        '    command: { run: "echo hi" }',
+        '    produces: greeting',
+      ].join('\n'),
+    )
+
+    const tagged = await executeWorkflowFile(workflowPath, {
+      runsDir: path.join(dir, '.runs'),
+      tag: 'gh-issue/22',
+    })
+    const startedTagged = (await readJournal(tagged.runDir)).find((e) => e.t === 'run.started')
+    expect(startedTagged?.t === 'run.started' && startedTagged.tag).toBe('gh-issue/22')
+
+    const untagged = await executeWorkflowFile(workflowPath, { runsDir: path.join(dir, '.runs2') })
+    const startedUntagged = (await readJournal(untagged.runDir)).find((e) => e.t === 'run.started')
+    if (startedUntagged?.t !== 'run.started') throw new Error('unreachable')
+    expect('tag' in startedUntagged).toBe(false)
+  })
 })

@@ -43,16 +43,24 @@ program
     '--input <pair...>',
     'workflow input as key=value, repeatable — validated against the workflow inputSchema',
   )
+  .option('--tag <string>', 'opaque correlation tag, stored on the run and echoed by yak pending/status')
   .action(
     async (
       workflow: string,
-      options: { adapter: string; interactive: boolean; isolation: string; input?: string[] },
+      options: {
+        adapter: string
+        interactive: boolean
+        isolation: string
+        input?: string[]
+        tag?: string
+      },
     ) => {
       process.exitCode = await runCommand(workflow, {
         adapter: requireAdapterId(options.adapter),
         interactive: options.interactive,
         isolation: requireIsolation(options.isolation),
         input: parseInputPairs(options.input),
+        tag: options.tag,
       })
     },
   )

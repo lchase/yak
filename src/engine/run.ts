@@ -35,6 +35,10 @@ export interface ExecuteOptions {
   /** The `yak run --input key=value` map (yak#27). Validated against the
    * workflow's `inputSchema` and written as the reserved `input` artifact. */
   input?: Record<string, unknown>
+  /** `yak run --tag <string>` (yak#22): an opaque caller-supplied
+   * correlation tag, stored verbatim on `run.started` and echoed by `yak
+   * pending`/`yak status`. No engine semantics attached. */
+  tag?: string
 }
 
 /**
@@ -146,6 +150,7 @@ export async function executeWorkflowFile(
     inputHash: inputWritten?.hash ?? sha256(JSON.stringify(workflow)),
     adapter,
     isolation,
+    ...(opts.tag !== undefined ? { tag: opts.tag } : {}),
   })
 
   if (inputWritten) {

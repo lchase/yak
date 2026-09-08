@@ -431,7 +431,7 @@ The agent produces a patch; the engine pushes it. This keeps "the agent has full
 ## 6. CLI surface (MVP)
 
 ```
-yak run <workflow> [--input k=v] [--interactive] [--isolation worktree]
+yak run <workflow> [--input k=v] [--interactive] [--isolation worktree] [--tag <string>]
 yak resume <run-id>
 yak status [<run-id>]          # what's running, what's pending a human
 yak pending                    # every run across the repo awaiting input
