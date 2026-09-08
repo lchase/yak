@@ -15,6 +15,7 @@ const LOOP_BUDGET_EXHAUSTED_WORKFLOW = path.join(
   'loop-budget-exhausted.yaml',
 )
 const LOOP_NO_PROGRESS_WORKFLOW = path.join(process.cwd(), 'test', 'workflows', 'loop-no-progress.yaml')
+const LOOP_PRODUCES_WORKFLOW = path.join(process.cwd(), 'test', 'workflows', 'loop-produces.yaml')
 
 let dir: string
 let cwd: string
@@ -236,5 +237,49 @@ describe('ticket 09: yak status detail for a loop', () => {
     const detail = loopStatusFromJournal(loopStep, events)
 
     expect(detail).toMatchObject({ stepId: 'fix-until-green', state: 'completed', iteration: 3 })
+  })
+})
+
+describe('yak#35: a loop step with `produces` writes its own artifact', () => {
+  it('writes the final until-context object and orders a downstream `needs` after the loop', async () => {
+    const runsDir = path.join(dir, '.runs')
+    const result = await executeWorkflowFile(LOOP_PRODUCES_WORKFLOW, { runsDir, cwd })
+    expect(result.status).toBe('ok')
+
+    // the loop's artifact is the last iteration's body artifacts, keyed by name
+    const raw = await readFile(path.join(result.runDir, 'artifacts', 'deliverable.json'), 'utf8')
+    const parsed = JSON.parse(raw)
+    expect(parsed.testresult.exitCode).toBe(0)
+    expect(parsed.code.exitCode).toBe(0)
+
+    const events = await readJournal(result.runDir)
+
+    // step.completed for the loop carries the artifact
+    const loopDone = events.find((e) => e.t === 'step.completed' && e.stepId === 'fix-until-green')
+    expect(loopDone).toMatchObject({ artifact: 'deliverable' })
+    expect((loopDone as { artifactHash?: string }).artifactHash).toBeTruthy()
+
+    // artifact.written was journaled for the loop's produces
+    expect(events.some((e) => e.t === 'artifact.written' && e.name === 'deliverable')).toBe(true)
+
+    // the downstream step that `needs: [deliverable]` starts only after the loop completed
+    const loopDoneIdx = events.findIndex((e) => e.t === 'step.completed' && e.stepId === 'fix-until-green')
+    const approveStartIdx = events.findIndex((e) => e.t === 'step.started' && e.stepId === 'approve')
+    expect(approveStartIdx).toBeGreaterThan(loopDoneIdx)
+  })
+
+  it('resume trusts the loop artifact from the journal and re-runs nothing', async () => {
+    const runsDir = path.join(dir, '.runs')
+    const first = await executeWorkflowFile(LOOP_PRODUCES_WORKFLOW, { runsDir, cwd })
+    expect(first.status).toBe('ok')
+
+    const again = await resumeRun(first.runId, { runsDir, cwd })
+    expect(again.status).toBe('ok')
+
+    // resume replayed the journal, trusted every completed step (loop
+    // included) and launched nothing new — no second run of the body.
+    const events = await readJournal(first.runDir)
+    const testStarted = events.filter((e) => e.t === 'step.started' && e.stepId === 'test')
+    expect(testStarted).toHaveLength(3)
   })
 })

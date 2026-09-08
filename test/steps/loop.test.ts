@@ -98,3 +98,28 @@ describe('ticket 07: loop-body agent session persistence (freshContext)', () => 
     expect(adapter.requests.every((r) => r.sessionId === undefined)).toBe(true)
   })
 })
+
+describe('yak#35: loop `produces` on the onExhausted: "continue" path', () => {
+  it('writes the loop artifact from the last iteration context when exhaustion is treated as success', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const adapter = new QueueAdapter()
+    const step: LoopStep = {
+      id: 'converse',
+      kind: 'loop',
+      produces: 'summary',
+      body: [agent({ id: 'ask', prompt: { inline: 'go' }, produces: 'answer' })],
+      until: 'false',
+      budget: { maxIterations: 2 },
+      onExhausted: 'continue',
+    }
+
+    const ctx = baseCtx(adapter)
+    const status = await runLoopStep(step, ctx)
+
+    expect(status).toBe('ok')
+    const raw = await readFile(path.join(runDir, 'artifacts', 'summary.json'), 'utf8')
+    expect(JSON.parse(raw)).toEqual({ answer: 'ok' })
+    // hash was seeded into the shared map for downstream cache keys
+    expect(ctx.outerArtifactHashes.get('summary')).toBeTruthy()
+  })
+})
