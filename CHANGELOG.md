@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/lchase/yak/compare/yak-v0.3.1...yak-v0.4.0) (2026-09-08)
+
+
+### Features
+
+* yak run --tag &lt;string&gt; — caller-supplied correlation tag ([#37](https://github.com/lchase/yak/issues/37)) ([d302acb](https://github.com/lchase/yak/commit/d302acbbbbbe3dba70f2764bfd917ce71e8bcaeb)), closes [#22](https://github.com/lchase/yak/issues/22)
+* yak run prints the run id to stderr at launch ([#39](https://github.com/lchase/yak/issues/39)) ([8dfde90](https://github.com/lchase/yak/commit/8dfde9037d02341859cbd503f50750cef919dc0d)), closes [#23](https://github.com/lchase/yak/issues/23)
+
 ## [0.3.1](https://github.com/lchase/yak/compare/yak-v0.3.0...yak-v0.3.1) (2026-09-07)
 
 
