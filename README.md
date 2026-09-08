@@ -42,7 +42,9 @@ bug) for a guided walkthrough — also live at
   rather than failing it. `yak pending` lists every run across the repo
   awaiting a human answer; `yak resume <run-id>` replays and continues;
   `--interactive` prompts through open gates inline instead of exiting to
-  resume later.
+  resume later. `yak cancel <run-id>` terminates a live run's process tree
+  and journals a clean `failed`/`cancelled` terminal state, so any
+  out-of-process supervisor has a supported kill.
 - **Worktree isolation:** `yak run --isolation worktree` runs the whole
   workflow inside a fresh git worktree; `map` steps can additionally
   isolate each item into its own sibling worktree.

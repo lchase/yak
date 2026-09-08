@@ -113,7 +113,11 @@ export type RunIsolation = 'worktree' | 'none'
 
 export type JournalEvent =
   | { t: 'run.started';      runId: string; workflow: string; inputHash: string; adapter: AdapterId
-                             isolation: RunIsolation; tag?: string }
+                             isolation: RunIsolation; tag?: string
+                             // yak#24: OS pid of the `yak run`/`yak resume` process, so an
+                             // out-of-process `yak cancel` can signal it. Optional — journals
+                             // written before yak#24 don't carry it.
+                             pid?: number }
   | { t: 'step.started';     stepId: StepId; iteration?: number
                              semanticKey: string; definitionKey: string }
   | { t: 'step.completed';   stepId: StepId; iteration?: number; artifact?: ArtifactName
@@ -128,6 +132,10 @@ export type JournalEvent =
   | { t: 'run.suspended';    reason: 'gate' | 'budget' | 'exhausted'
                              loopStepId?: StepId; iteration?: number
                              tripped?: 'maxIterations' | 'maxTokens' | 'noProgress' }
-  | { t: 'run.finished';     status: 'ok' | 'failed' | 'suspended' }
+  | { t: 'run.resumed';      pid: number }
+  | { t: 'run.finished';     status: 'ok' | 'failed' | 'suspended'
+                             // yak#24: set to 'cancelled' only when `yak cancel` wrote this
+                             // terminal event after signalling the run's process.
+                             reason?: 'cancelled' }
 
 export type JournalEnvelope = JournalEvent & { at: string; runId: string }

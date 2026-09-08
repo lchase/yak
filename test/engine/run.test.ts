@@ -128,6 +128,25 @@ describe('single-step command run', () => {
     expect('tag' in startedUntagged).toBe(false)
   })
 
+  it('records this process pid on run.started (yak#24)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
+    const workflowPath = await writeWorkflow(
+      dir,
+      [
+        'name: pidded',
+        'version: "1"',
+        'steps:',
+        '  - id: greet',
+        '    command: { run: "echo hi" }',
+        '    produces: greeting',
+      ].join('\n'),
+    )
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: path.join(dir, '.runs') })
+    const started = (await readJournal(result.runDir)).find((e) => e.t === 'run.started')
+    expect(started?.t === 'run.started' && started.pid).toBe(process.pid)
+  })
+
   it('fires onStart after run.started and before any step runs (yak#23)', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
     const workflowPath = await writeWorkflow(
