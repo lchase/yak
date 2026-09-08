@@ -39,6 +39,21 @@ export interface ExecuteOptions {
    * correlation tag, stored verbatim on `run.started` and echoed by `yak
    * pending`/`yak status`. No engine semantics attached. */
   tag?: string
+  /** yak#23: invoked once, immediately after `run.started` is journalled
+   * and before any step executes, so an out-of-process launcher can
+   * capture the run id without waiting for a terminal state or diffing
+   * `.runs/`. The engine writes nothing to stdout/stderr itself — the CLI
+   * layer owns that. Awaited before the first step runs, so an async
+   * launcher can finish recording the mapping first. */
+  onStart?: (info: RunStartInfo) => void | Promise<void>
+}
+
+export interface RunStartInfo {
+  runId: string
+  runDir: string
+  /** The isolation worktree's branch, `yak/<run-id>`, only when the run
+   * is `--isolation worktree`. */
+  worktreeBranch?: string
 }
 
 /**
@@ -106,6 +121,11 @@ function worktreePathFor(runsDir: string, runId: string): string {
   return path.join(path.dirname(runsDir), '.yak', 'worktrees', runId)
 }
 
+/** The branch an `--isolation worktree` run's worktree is checked out on. */
+function worktreeBranchFor(runId: string): string {
+  return `yak/${runId}`
+}
+
 function generateRunId(): string {
   const iso = new Date().toISOString() // e.g. 2026-08-08T14:03:11.123Z
   const [datePart, timePart] = iso.split('T')
@@ -162,13 +182,19 @@ export async function executeWorkflowFile(
     })
   }
 
+  await opts.onStart?.({
+    runId,
+    runDir,
+    ...(isolation === 'worktree' ? { worktreeBranch: worktreeBranchFor(runId) } : {}),
+  })
+
   // `runsDir`/`cacheDir` stay anchored to the original repo regardless of
   // isolation — only the step-execution cwd swaps into the worktree.
   let stepCwd = cwd
   if (isolation === 'worktree') {
     const worktreePath = worktreePathFor(runsDir, runId)
     try {
-      await createWorktree(cwd, `yak/${runId}`, 'HEAD', worktreePath)
+      await createWorktree(cwd, worktreeBranchFor(runId), 'HEAD', worktreePath)
     } catch {
       // A worktree-add failure (e.g. a race against another concurrent run)
       // is an ordinary run failure, not an uncaught exception — it goes

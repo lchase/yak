@@ -133,6 +133,24 @@ describe('yak run --isolation worktree', () => {
     expect(branch.trim()).toBe(`yak/${result.runId}`)
   })
 
+  it('reports the worktree branch to onStart (yak#23)', async () => {
+    const repoRoot = await initRepoWithCommit()
+    const workflowPath = await writeMarkerWorkflow(repoRoot)
+    const runsDir = path.join(repoRoot, '.runs')
+
+    let seen: { runId: string; worktreeBranch?: string } | undefined
+    const result = await executeWorkflowFile(workflowPath, {
+      runsDir,
+      cwd: repoRoot,
+      isolation: 'worktree',
+      onStart: (info) => {
+        seen = info
+      },
+    })
+
+    expect(seen?.worktreeBranch).toBe(`yak/${result.runId}`)
+  })
+
   it('keeps runsDir and cacheDir anchored to the original repo, not the worktree', async () => {
     const repoRoot = await initRepoWithCommit()
     const workflowPath = await writeMarkerWorkflow(repoRoot)

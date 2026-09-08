@@ -73,6 +73,14 @@ export async function runCommand(workflowPath: string, opts: RunCommandOptions =
       isolation: opts.isolation,
       input: opts.input,
       tag: opts.tag,
+      // yak#23: emit the run id (and worktree branch) to stderr the moment
+      // `run.started` is journalled, so an out-of-process launcher can
+      // capture it without waiting for a terminal state. stdout is
+      // untouched — the terminal-state line there is unchanged.
+      onStart: ({ runId, worktreeBranch }) => {
+        console.error(`run ${runId} started`)
+        if (worktreeBranch) console.error(`  worktree branch ${worktreeBranch}`)
+      },
     })
 
     while (opts.interactive && result.status === 'suspended') {
