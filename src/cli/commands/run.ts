@@ -16,6 +16,8 @@ export interface RunCommandOptions {
   /** `yak run --input key=value` map (yak#27), validated against the
    * workflow's `inputSchema`. */
   input?: Record<string, unknown>
+  /** `yak run --tag <string>` (yak#22): opaque caller correlation tag. */
+  tag?: string
 }
 
 /**
@@ -70,6 +72,7 @@ export async function runCommand(workflowPath: string, opts: RunCommandOptions =
       adapter: opts.adapter,
       isolation: opts.isolation,
       input: opts.input,
+      tag: opts.tag,
     })
 
     while (opts.interactive && result.status === 'suspended') {

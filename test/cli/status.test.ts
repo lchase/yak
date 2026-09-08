@@ -87,6 +87,17 @@ describe('yak status (CLI)', () => {
     ])
   })
 
+  it('echoes the run --tag on the header line (yak#22)', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
+    const runsDir = path.join(dir, '.runs')
+    const result = await executeWorkflowFile(CI_WORKFLOW, { runsDir, tag: 'issue-42' })
+
+    const exitCode = await statusCommand(result.runId, { runsDir })
+
+    expect(exitCode).toBe(0)
+    expect(logs[0]).toBe(`run ${result.runId} (tag: issue-42):`)
+  })
+
   it('exits 1 when no runs exist', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'yak-'))
     const runsDir = path.join(dir, '.runs')

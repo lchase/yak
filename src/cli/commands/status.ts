@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { readJournal } from '../../engine/journal.js'
+import { readJournal, runTagFromJournal } from '../../engine/journal.js'
 import { defaultRunsDir, findLatestRunId, readRunWorkflow } from '../../engine/run.js'
 import {
   failedStepsFromJournal,
@@ -33,7 +33,8 @@ export async function statusCommand(runId: string | undefined, opts: StatusOptio
   const statuses = stepStatusesFromJournal(workflow.steps, events)
   const failuresByStep = new Map(failedStepsFromJournal(events).map((f) => [f.stepId, f]))
 
-  console.log(`run ${resolvedRunId}:`)
+  const tag = runTagFromJournal(events)
+  console.log(`run ${resolvedRunId}${tag !== undefined ? ` (tag: ${tag})` : ''}:`)
   for (const { stepId, status } of statuses) {
     console.log(`  ${stepId}: ${status}`)
 

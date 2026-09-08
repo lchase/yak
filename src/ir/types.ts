@@ -113,7 +113,7 @@ export type RunIsolation = 'worktree' | 'none'
 
 export type JournalEvent =
   | { t: 'run.started';      runId: string; workflow: string; inputHash: string; adapter: AdapterId
-                             isolation: RunIsolation }
+                             isolation: RunIsolation; tag?: string }
   | { t: 'step.started';     stepId: StepId; iteration?: number
                              semanticKey: string; definitionKey: string }
   | { t: 'step.completed';   stepId: StepId; iteration?: number; artifact?: ArtifactName
