@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/lchase/yak/compare/yak-v0.4.1...yak-v0.5.0) (2026-09-08)
+
+
+### Features
+
+* a loop step's `produces` writes its own artifact ([#35](https://github.com/lchase/yak/issues/35)) ([#44](https://github.com/lchase/yak/issues/44)) ([cfaa280](https://github.com/lchase/yak/commit/cfaa2804cd646064c12f5e44078abea80c407677))
+* yak cancel &lt;run-id&gt; — supported engine-side termination of a live run ([#24](https://github.com/lchase/yak/issues/24)) ([#42](https://github.com/lchase/yak/issues/42)) ([9ea9ac7](https://github.com/lchase/yak/commit/9ea9ac72fb40a9ac94399328635ba536428083ca))
+
 ## [0.4.1](https://github.com/lchase/yak/compare/yak-v0.4.0...yak-v0.4.1) (2026-09-08)
 
 
