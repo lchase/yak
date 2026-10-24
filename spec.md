@@ -205,7 +205,7 @@ map({
 
 Partial failure policy is explicit: `onItemFailure: 'skip' | 'fail' | 'retry'`. Failed items land in the output array as `null` with a sidecar error record — never silently dropped.
 
-**`loop`** — wrap a subgraph with a termination condition and a budget. Body steps whose inputs don't come from an earlier sibling run in parallel when `concurrency` is set above its default of 1 (still capped by the run's global concurrency).
+**`loop`** — wrap a subgraph with a termination condition and a budget. The effective cap is `min(concurrency, global concurrency)`. When that cap is 1 (the default, or a higher `concurrency` clipped by a global cap of 1) the body runs in declared order. When the cap is greater than 1, body steps whose inputs don't come from an earlier sibling run in parallel, and a step may start before an earlier sibling it does not depend on while that sibling is still waiting.
 
 ```ts
 loop({
@@ -712,9 +712,11 @@ export interface LoopStep extends BaseStep {
   body: Step[]
   until: Expr
   budget: Budget
-  concurrency?: number                 // default 1 — independent body steps
-                                       // run in parallel, capped by the run's
-                                       // global concurrency
+  concurrency?: number                 // default 1. Effective cap is
+                                       // min(concurrency, global). Cap 1 runs
+                                       // the body in declared order. Cap > 1
+                                       // may let a step overtake an earlier
+                                       // not-ready sibling it doesn't depend on
   onExhausted?: 'suspend' | 'fail' | 'continue'   // default 'suspend'
   freshContext?: boolean               // default true
 }

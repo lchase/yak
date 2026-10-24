@@ -7,7 +7,7 @@ import { executeWorkflowFile, readRunWorkflow, resumeRun } from '../../src/engin
 import { loopStatusFromJournal } from '../../src/engine/status.js'
 import { normalizeWorkflow } from '../../src/ir/normalize.js'
 import type { JournalEnvelope, LoopStep, Step } from '../../src/ir/types.js'
-import { validateWorkflow, WorkflowValidationError } from '../../src/ir/validate.js'
+import { validateWorkflow } from '../../src/ir/validate.js'
 
 const LOOP_SUCCESS_WORKFLOW = path.join(process.cwd(), 'test', 'workflows', 'loop-success.yaml')
 const LOOP_BUDGET_EXHAUSTED_WORKFLOW = path.join(
@@ -471,6 +471,83 @@ describe('loop body parallelism', () => {
     expect(new Set(order).size).toBe(order.length)
   })
 
+  it('runs [a, b needs a, c] in declared order at the default concurrency', async () => {
+    const workflowPath = await writeWorkflow('declared.yaml', [
+      'name: loop-declared',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      until: "true"',
+      '      budget:',
+      '        maxIterations: 1',
+      '      body:',
+      '        - id: a',
+      '          command: { run: "echo a" }',
+      '          produces: a',
+      '        - id: b',
+      '          needs: [a]',
+      '          command: { run: "echo b" }',
+      '          produces: b',
+      '        - id: c',
+      '          command: { run: "echo c" }',
+      '          produces: c',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('ok')
+
+    const events = await readJournal(result.runDir)
+    const order = ['a', 'b', 'c'].flatMap((id) => [
+      eventIndex(events, 'step.started', id),
+      eventIndex(events, 'step.completed', id),
+    ])
+    expect(order).toEqual([...order].sort((left, right) => left - right))
+    expect(new Set(order).size).toBe(order.length)
+  })
+
+  it('at concurrency 2 lets c overtake b while b is still waiting on a', async () => {
+    const workflowPath = await writeWorkflow('overtake.yaml', [
+      'name: loop-overtake',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      concurrency: 2',
+      '      until: "true"',
+      '      budget:',
+      '        maxIterations: 1',
+      '      body:',
+      '        - id: a',
+      '          command: { run: "sleep 0.3 && echo a" }',
+      '          produces: a',
+      '        - id: b',
+      '          needs: [a]',
+      '          command: { run: "echo b" }',
+      '          produces: b',
+      '        - id: c',
+      '          command: { run: "echo c" }',
+      '          produces: c',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('ok')
+
+    const events = await readJournal(result.runDir)
+    const aDone = eventIndex(events, 'step.completed', 'a')
+    const bStart = eventIndex(events, 'step.started', 'b')
+    const cStart = eventIndex(events, 'step.started', 'c')
+    const cDone = eventIndex(events, 'step.completed', 'c')
+    // c does not depend on a or b, so it runs in the first wave with a
+    // and finishes while a is still sleeping. b waits for a, so it starts
+    // only after c has already finished. a and c start together; their
+    // step.started writes are not ordered against each other.
+    expect(cStart).toBeGreaterThanOrEqual(0)
+    expect(cDone).toBeLessThan(aDone)
+    expect(bStart).toBeGreaterThan(aDone)
+    expect(cStart).toBeLessThan(bStart)
+  })
+
   it('resolves a backward input to the previous round, undefined on round 1', async () => {
     await writeTransforms()
     await writeFixture('loop-backward', 'narrator', [{ output: { ok: true } }])
@@ -782,19 +859,6 @@ describe('loop concurrency parse and validate', () => {
     expect(() => normalizeWorkflow(rawLoop(1.5))).toThrow(/concurrency/)
   })
 
-  it('rejects a hand-built non-positive concurrency at validate time', async () => {
-    const step: LoopStep = {
-      id: 'revise',
-      kind: 'loop',
-      concurrency: 0,
-      until: 'true',
-      budget: { maxIterations: 1 },
-      body: [{ id: 'a', kind: 'command', run: 'true' }],
-    }
-    await expect(validateWorkflow(workflow([step]))).rejects.toThrow(WorkflowValidationError)
-    await expect(validateWorkflow(workflow([step]))).rejects.toThrow(/concurrency must be a positive integer/)
-  })
-
   it('rejects map, loop, and gate inside a body at load time', async () => {
     const cases: { kind: 'map' | 'loop' | 'gate'; body: Step }[] = [
       {
@@ -859,6 +923,31 @@ describe('loop concurrency parse and validate', () => {
       ],
     })
     await expect(validateWorkflow(raw)).resolves.toBeUndefined()
+  })
+
+  it('rejects an or-default whose other operand is an undeclared identifier', async () => {
+    const raw = normalizeWorkflow({
+      name: 'w',
+      version: '1',
+      steps: [
+        {
+          id: 'revise',
+          loop: {
+            until: 'true',
+            budget: { maxIterations: 1 },
+            body: [
+              {
+                id: 'security',
+                needs: ['security'],
+                produces: 'security',
+                agent: { prompt: { inline: '{{ security || secrity }}' } },
+              },
+            ],
+          },
+        },
+      ],
+    })
+    await expect(validateWorkflow(raw)).rejects.toThrow(/prompt references "\{\{secrity\}\}"/)
   })
 
   it('still rejects an or-default whose leading identifier is not a declared need', async () => {
@@ -965,6 +1054,31 @@ describe('loop concurrency parse and validate', () => {
         { id: 'ux', kind: 'agent', prompt: { inline: 'review' }, tools: ['Write'], produces: 'ux' },
       ],
     }
+    await validateWorkflow(workflow([serial]))
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('warns when a parallel command step shares the cwd', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const body = [
+      { id: 'build', kind: 'command' as const, run: 'npm test', produces: 'build' },
+      { id: 'lint', kind: 'command' as const, run: 'npm run lint', produces: 'lint' },
+    ]
+    const parallel: LoopStep = {
+      id: 'revise',
+      kind: 'loop',
+      concurrency: 2,
+      until: 'true',
+      budget: { maxIterations: 1 },
+      body,
+    }
+    await validateWorkflow(workflow([parallel]))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/"build" is a command step/))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/"lint" is a command step/))
+    warn.mockClear()
+
+    const serial: LoopStep = { ...parallel, concurrency: 1 }
     await validateWorkflow(workflow([serial]))
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()

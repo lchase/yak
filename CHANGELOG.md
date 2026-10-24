@@ -4,11 +4,12 @@
 
 ### Features
 
-* a loop body can run independent steps in parallel via optional `concurrency` (default 1 keeps declared order)
+* a loop body can run independent steps in parallel via optional `concurrency` (effective cap 1 keeps declared order)
 
 ### Bug Fixes
 
-* prompt placeholders accept `{{ name || "default" }}` — validation reads the leading identifier as the root
+* a loop body whose effective concurrency is 1 runs in declared order, so a later step does not jump an earlier sibling that is still waiting
+* prompt placeholders validate every identifier outside string literals (`{{ !x }}`, `{{ x || secrity }}`, `{{ fn(x) }}`); names after `.` and jexl `|` transforms are not roots
 
 ## [0.5.0](https://github.com/lchase/yak/compare/yak-v0.4.1...yak-v0.5.0) (2026-09-08)
 

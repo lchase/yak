@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { extractTemplateRoots } from '../expr/template.js'
-import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps, inputNamesOf } from './graph.js'
+import { agentInputNames, buildProducerMap, dependenciesOf, earlierProducerIds, flattenSteps } from './graph.js'
 import { describeSchemaSpec, resolveSchemaSpec, type SchemaSpec } from './schema-resolve.js'
 import { INPUT_ARTIFACT } from './types.js'
 import type { ArtifactName, Expr, GateStep, LoopStep, RunIsolation, Step, StepId, Workflow } from './types.js'
@@ -174,15 +174,15 @@ function checkLoopBodyKinds(steps: Step[]): void {
 /** Parallel body steps share the loop's cwd, the same race `checkMapIsolation`
  * rejects for `isolation: 'none'`. A loop opts into that race with
  * `concurrency > 1`, so warn (the default of 1 never overlaps) when two body
- * steps can actually run in the same round and one of them declares a
- * write-capable tool. A later step that waits on an earlier one — directly
- * or through other this-round producers — does not overlap it. */
+ * steps can actually run in the same round and one of them can write that
+ * cwd: an agent tool of `Edit` / `Write` / `Bash`, or any command step
+ * (commands share the cwd and may write files there). A later step that
+ * waits on an earlier one — directly or through other this-round producers
+ * — does not overlap it. A non-positive `concurrency` is rejected by the
+ * raw-loop schema at parse time, not here. */
 function checkLoopParallelWriters(steps: Step[]): void {
   for (const step of steps) {
     if (step.kind === 'loop') {
-      if (step.concurrency !== undefined && (!Number.isInteger(step.concurrency) || step.concurrency < 1)) {
-        throw new WorkflowValidationError(`step "${step.id}": concurrency must be a positive integer`)
-      }
       warnParallelWriteCapableBody(step)
       checkLoopParallelWriters(step.body)
     } else if (step.kind === 'map') {
@@ -194,22 +194,6 @@ function checkLoopParallelWriters(steps: Step[]): void {
 function writeCapableTool(step: Step): string | undefined {
   if (step.kind !== 'agent') return undefined
   return (step.tools ?? []).find((tool) => WRITE_CAPABLE_TOOLS.has(tool))
-}
-
-function earlierProducers(
-  step: Step,
-  posIndex: number,
-  producerOf: Map<ArtifactName, StepId>,
-  order: Map<StepId, number>,
-): StepId[] {
-  const deps: StepId[] = []
-  for (const name of inputNamesOf(step)) {
-    const producerId = producerOf.get(name)
-    if (producerId === undefined) continue
-    const producerPos = order.get(producerId)
-    if (producerPos !== undefined && producerPos < posIndex) deps.push(producerId)
-  }
-  return deps
 }
 
 /** True when `step` waits, this round, on `targetId` — directly, or through
@@ -225,7 +209,7 @@ function waitsOn(
   const seen = new Set<StepId>()
   const startPos = order.get(step.id)
   if (startPos === undefined) return false
-  const stack = earlierProducers(step, startPos, producerOf, order)
+  const stack = earlierProducerIds(step, startPos, producerOf, order)
   while (stack.length > 0) {
     const id = stack.pop()
     if (id === undefined || seen.has(id)) continue
@@ -234,7 +218,7 @@ function waitsOn(
     const pred = stepsById.get(id)
     const predPos = order.get(id)
     if (!pred || predPos === undefined) continue
-    stack.push(...earlierProducers(pred, predPos, producerOf, order))
+    stack.push(...earlierProducerIds(pred, predPos, producerOf, order))
   }
   return false
 }
@@ -257,11 +241,13 @@ function warnParallelWriteCapableBody(loop: LoopStep): void {
       for (const bodyStep of [earlier, later]) {
         if (warned.has(bodyStep.id)) continue
         const tool = writeCapableTool(bodyStep)
-        if (!tool) continue
+        const command = bodyStep.kind === 'command'
+        if (!tool && !command) continue
+        const why = command ? 'is a command step' : `declares write-capable tool "${tool}"`
+        const fix = command ? 'use concurrency: 1' : 'use concurrency: 1 or drop the write-capable tool'
         console.warn(
           `step "${loop.id}": concurrency ${concurrency} runs body steps "${earlier.id}" and "${later.id}" in parallel, ` +
-            `and "${bodyStep.id}" declares write-capable tool "${tool}" — concurrent body steps share one cwd and may race; ` +
-            `use concurrency: 1 or drop the write-capable tool`,
+            `and "${bodyStep.id}" ${why} — concurrent body steps share one cwd and may race; ${fix}`,
         )
         warned.add(bodyStep.id)
       }

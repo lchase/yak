@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import pLimit from 'p-limit'
 import { z } from 'zod'
 import type { AgentAdapter } from '../adapters/types.js'
@@ -12,7 +13,7 @@ import {
 import { appendJournalEvent, readJournal } from '../engine/journal.js'
 import { writeLoopExhaustedRequest } from '../engine/suspend.js'
 import { evalExpr } from '../expr/eval.js'
-import { buildProducerMap, inputNamesOf } from '../ir/graph.js'
+import { buildProducerMap, earlierProducerIds, inputNamesOf } from '../ir/graph.js'
 import type { AgentStep, ArtifactName, LoopStep, Step, StepId } from '../ir/types.js'
 import { AgentStepFailedError, runAgentStep } from './agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from './command.js'
@@ -57,9 +58,12 @@ interface ResumeFrom {
  * only on producers of its inputs that appear earlier in the body (this
  * round's value — the same rule `runOneBodyStep` uses below). A producer
  * at the same or a later body position still resolves to the previous
- * round (`undefined` on round 1). `concurrency` (default 1) caps how many
- * body steps run at once and is itself capped by the run's global
- * concurrency, so the default keeps declared order. On the first body
+ * round (`undefined` on round 1). The effective cap is
+ * `min(concurrency ?? 1, globalConcurrency)`. When that cap is 1 the body
+ * runs in declared order, including when `concurrency` is higher but the
+ * global cap clips it to 1. When the cap is greater than 1, a step may
+ * start before an earlier sibling that is not ready yet, if it does not
+ * depend on that sibling. On the first body
  * failure nothing new starts; steps already running finish, then the
  * error is rethrown.
  *
@@ -344,9 +348,21 @@ interface RunLoopRoundArgs {
  * body — the same `producerPos < posIndex` test `runOneBodyStep` uses to
  * decide whether an input is this round's value or the previous round's.
  * Steps that don't wait on each other are queued together, bounded by
- * `min(step.concurrency ?? 1, globalConcurrency)`. The first failure stops
- * further launches; work already inside the limit finishes, then the
- * original error is rethrown into `runLoopBody`'s handler. */
+ * `min(step.concurrency ?? 1, globalConcurrency)`.
+ *
+ * When that effective cap is 1, the scan stops at the first body step that
+ * is still waiting. A later sibling does not start while an earlier one
+ * has not finished, so the round matches the old sequential loop: `[a, b
+ * needs a, c]` runs a, then b, then c. The same holds when `concurrency`
+ * is above 1 but the global cap clips the round to 1.
+ *
+ * When the cap is greater than 1, a step may overtake an earlier sibling
+ * it does not depend on, while that sibling is still waiting. `[a, b needs
+ * a, c]` at cap 2 starts `c` alongside `a`; `b` still waits for `a`.
+ *
+ * The first failure stops further launches; work already inside the limit
+ * finishes, then the original error is rethrown into `runLoopBody`'s
+ * handler. */
 async function runLoopRound(args: RunLoopRoundArgs): Promise<void> {
   const {
     step,
@@ -368,22 +384,21 @@ async function runLoopRound(args: RunLoopRoundArgs): Promise<void> {
   const inFlight = new Map<StepId, Promise<'ok' | 'skipped' | 'error'>>()
   let firstError: unknown
 
-  const thisRoundDeps = (bodyStep: Step, posIndex: number): StepId[] => {
-    const deps: StepId[] = []
-    for (const name of inputNamesOf(bodyStep)) {
-      const producerId = localProducerOf.get(name)
-      if (producerId === undefined) continue
-      const producerPos = bodyOrderIndex.get(producerId)
-      if (producerPos !== undefined && producerPos < posIndex) deps.push(producerId)
-    }
-    return deps
-  }
+  const thisRoundDeps = (bodyStep: Step, posIndex: number): StepId[] =>
+    earlierProducerIds(bodyStep, posIndex, localProducerOf, bodyOrderIndex)
 
   const launchEligible = (): void => {
     if (firstError !== undefined) return
     for (const [posIndex, bodyStep] of step.body.entries()) {
       if (!remaining.has(bodyStep.id) || inFlight.has(bodyStep.id)) continue
-      if (!thisRoundDeps(bodyStep, posIndex).every((dep) => completed.has(dep))) continue
+      const ready = thisRoundDeps(bodyStep, posIndex).every((dep) => completed.has(dep))
+      if (!ready) {
+        // Cap 1 is the sequential body: do not look past a step that has
+        // not finished. Cap > 1 may start a later step that does not wait
+        // on this one.
+        if (cap === 1) break
+        continue
+      }
       inFlight.set(
         bodyStep.id,
         limit(async () => {
@@ -428,10 +443,13 @@ async function runLoopRound(args: RunLoopRoundArgs): Promise<void> {
 
   if (firstError !== undefined) throw firstError
 
-  if (remaining.size > 0) {
-    const stuck = [...remaining].join(', ')
-    throw new Error(`loop "${step.id}" stalled: body step(s) [${stuck}] never became eligible`)
-  }
+  // This-round edges only point at earlier positions, so a round with no
+  // failure always drains. A leftover here is a scheduler bug.
+  assert.equal(
+    remaining.size,
+    0,
+    `loop "${step.id}" stalled: body step(s) [${[...remaining].join(', ')}] never became eligible`,
+  )
 }
 
 interface RunOneBodyStepArgs {

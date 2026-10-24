@@ -107,10 +107,14 @@ reviewer's verdict; `noProgress`'s signal is the failing-test count —
 if it doesn't improve for two consecutive rounds, the loop suspends
 instead of grinding forever.
 
-That order is the default. `concurrency` defaults to `1`, so each body
-step finishes before the next one starts. Raising it runs steps that
-don't read an earlier sibling's artifact in the same round — see
-[parallel reviewers](#parallel-reviewers) below.
+That order is the default. `concurrency` defaults to `1`, and the
+effective cap is `min(concurrency, the run's global concurrency)`. When
+that cap is 1, each body step finishes before the next one starts — a
+later step does not jump ahead of an earlier sibling that is still
+waiting, even if it does not read that sibling's artifact. Raising the
+effective cap above 1 runs steps that don't read an earlier sibling in
+the same round, and a step may then start before an earlier sibling it
+does not depend on — see [parallel reviewers](#parallel-reviewers) below.
 
 `prep-feedback`'s `needs: [review]` looks backwards — `review` is
 produced by the *last* step in this same body. That's not a cycle: a
@@ -118,9 +122,11 @@ loop body's `needs` can point at a step later in its own body, and at
 runtime it resolves to *last round's* value (`undefined` on round one).
 A placeholder whose whole expression is `undefined` throws, so
 `{{ review.feedback }}` fails on the first round. `{{ review || "no prior feedback yet" }}`
-does not: validation reads the leading identifier (`review`), and `||`
-supplies the default when that artifact is missing. A transform can do
-the same check in code — that's what this fixture's `prepFeedback` does.
+does not: validation reads `review` (a string literal is not a root), and `||`
+supplies the default when that artifact is missing. A bare name on the
+other side of `||`, such as `{{ review || secrity }}`, is checked too —
+`secrity` has to be a declared input. A transform can do the same check
+in code — that's what this fixture's `prepFeedback` does.
 `fn: prepFeedback` resolves against a fixed path, `.yak/transforms.ts`
 relative to the run's `cwd` — see
 [standalone transform](./standalone-transform#why-transform-is-its-own-step-kind)
@@ -208,13 +214,20 @@ other, so with `concurrency: 4` the four reviews run in one round.
 `security`'s `needs: [security]` points at itself — same body position,
 so it resolves to last round (`undefined` on round one) and the
 `|| "none yet"` default keeps the prompt from throwing. `approver`
-waits on all four, then reads this round's values. The cap is also
-clipped by the run's global concurrency. Leave `concurrency` unset and
-the body runs in declared order, exactly as the fixture above does.
+waits on all four, then reads this round's values. The effective cap is
+`min(concurrency, the run's global concurrency)`. When that cap is 1 —
+`concurrency` left unset, or a higher value clipped by a global cap of
+1 — the body runs in declared order, exactly as the fixture above does.
+When the cap is greater than 1, a step may overtake an earlier sibling
+that is not ready yet and that it does not depend on. In a body
+`[a, b needs a, c]` at cap 2, `c` starts with `a` while `b` is still
+waiting on `a`.
 
 Reviewers that declare a write-capable tool (`Edit`, `Write`, `Bash`)
-and can actually overlap share one working directory. Validation warns
-about that pair; `concurrency: 1`, or dropping the write tool, clears it.
+and can actually overlap share one working directory. Command steps
+share that directory too and may write files there, so a command that
+can overlap another body step gets the same warning. `concurrency: 1`,
+or dropping the write tool, clears it.
 
 ## Run it
 

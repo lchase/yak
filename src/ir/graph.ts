@@ -44,6 +44,27 @@ export function dependenciesOf(step: Step, producerOf: Map<ArtifactName, StepId>
     .filter((id): id is StepId => id !== undefined)
 }
 
+/** Producers of `step`'s inputs that sit earlier than `posIndex` in `order`.
+ * A loop body waits on these for this round's value. A producer at the same
+ * or a later position is not a this-round dependency — it resolves to the
+ * previous round. The loop scheduler and validation's overlap walk
+ * (`waitsOn`) both use this so the two stay the same rule. */
+export function earlierProducerIds(
+  step: Step,
+  posIndex: number,
+  producerOf: Map<ArtifactName, StepId>,
+  order: Map<StepId, number>,
+): StepId[] {
+  const deps: StepId[] = []
+  for (const name of inputNamesOf(step)) {
+    const producerId = producerOf.get(name)
+    if (producerId === undefined) continue
+    const producerPos = order.get(producerId)
+    if (producerPos !== undefined && producerPos < posIndex) deps.push(producerId)
+  }
+  return deps
+}
+
 /** Every step reachable from `steps`, including a `loop`'s `body` steps and
  * a `map`'s inner `step` — used by the load-time checks that must see into
  * nested steps (duplicate ids, known kinds, agent tool/schema/prompt
