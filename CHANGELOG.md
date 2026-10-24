@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+* a loop body can run independent steps in parallel via optional `concurrency` (default 1 keeps declared order)
+
+### Bug Fixes
+
+* prompt placeholders accept `{{ name || "default" }}` — validation reads the leading identifier as the root
+
 ## [0.5.0](https://github.com/lchase/yak/compare/yak-v0.4.1...yak-v0.5.0) (2026-09-08)
 
 

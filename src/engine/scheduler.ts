@@ -229,6 +229,7 @@ async function runStep(
       semanticKey,
       definitionKey,
       outerArtifactHashes: artifactHashes,
+      globalConcurrency: ctx.concurrency ?? DEFAULT_CONCURRENCY,
       buildAdapter: (step, iteration) => buildAdapter(ctx.adapter, ctx, workflowName, step, iteration),
       loopContinuation: ctx.loopContinuations?.get(step.id),
     })

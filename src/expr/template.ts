@@ -1,14 +1,17 @@
 import jexl from 'jexl'
 
 const PLACEHOLDER_RE = /\{\{\s*([^}]+?)\s*\}\}/g
+const ROOT_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*/
 
 /** The root identifier each `{{...}}` placeholder reads from — used by
- * validate.ts's load-time check that every root is in `needs ∪ context.inherit`. */
+ * validate.ts's load-time check that every root is in `needs ∪ context.inherit`.
+ * Only the leading identifier counts, so `{{ security.findings }}` and
+ * `{{ security || "none yet" }}` both root at `security`. */
 export function extractTemplateRoots(template: string): string[] {
   const roots = new Set<string>()
   for (const match of template.matchAll(PLACEHOLDER_RE)) {
     const expr = match[1]!.trim()
-    const root = expr.split(/[.[]/, 1)[0]
+    const root = ROOT_IDENTIFIER.exec(expr)?.[0]
     if (root) roots.add(root)
   }
   return [...roots]

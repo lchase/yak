@@ -20,6 +20,11 @@ describe('renderTemplate', () => {
   it('throws at render time on a missing field', async () => {
     await expect(renderTemplate('{{issue.nope}}', { issue: {} })).rejects.toThrow(/resolved to undefined/)
   })
+
+  it('renders an or-default when the root is missing, and the value when it is present', async () => {
+    await expect(renderTemplate('{{ security || "none yet" }}', {})).resolves.toBe('none yet')
+    await expect(renderTemplate('{{ security || "none yet" }}', { security: 'real' })).resolves.toBe('real')
+  })
 })
 
 describe('extractTemplateRoots', () => {
@@ -37,5 +42,14 @@ describe('extractTemplateRoots', () => {
 
   it('returns an empty list for a template with no placeholders', () => {
     expect(extractTemplateRoots('no placeholders here')).toEqual([])
+  })
+
+  it('takes the leading identifier when the placeholder is an or-default expression', () => {
+    expect(extractTemplateRoots('{{ security || "x" }}')).toEqual(['security'])
+    expect(extractTemplateRoots('{{ x || "default" }}')).toEqual(['x'])
+  })
+
+  it('still takes the root of a dotted expression that falls back with ||', () => {
+    expect(extractTemplateRoots('{{ security.findings || "x" }}')).toEqual(['security'])
   })
 })

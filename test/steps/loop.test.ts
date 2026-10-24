@@ -50,6 +50,7 @@ function baseCtx(adapter: AgentAdapter): LoopRunContext {
     cacheDir,
     semanticKey: 'sk',
     definitionKey: 'dk',
+    globalConcurrency: 4,
     outerArtifactHashes: new Map(),
     buildAdapter: () => adapter,
   }

@@ -3,10 +3,10 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { extractTemplateRoots } from '../expr/template.js'
-import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps } from './graph.js'
+import { agentInputNames, buildProducerMap, dependenciesOf, flattenSteps, inputNamesOf } from './graph.js'
 import { describeSchemaSpec, resolveSchemaSpec, type SchemaSpec } from './schema-resolve.js'
 import { INPUT_ARTIFACT } from './types.js'
-import type { ArtifactName, Expr, GateStep, RunIsolation, Step, StepId, Workflow } from './types.js'
+import type { ArtifactName, Expr, GateStep, LoopStep, RunIsolation, Step, StepId, Workflow } from './types.js'
 
 export class WorkflowValidationError extends Error {}
 
@@ -49,6 +49,7 @@ export async function validateWorkflow(
 ): Promise<void> {
   const flatSteps = flattenSteps(workflow.steps)
   checkKnownKinds(flatSteps)
+  checkLoopBodyKinds(workflow.steps)
   checkDuplicateIds(flatSteps)
   const producerOf = buildProducerMap(workflow.steps)
   checkReservedArtifactNames(flatSteps)
@@ -61,6 +62,7 @@ export async function validateWorkflow(
   await checkAgentPromptPlaceholders(flatSteps, cwd)
   checkSessionChainDepth(flatSteps)
   checkMapIsolation(workflow.steps, runIsolation)
+  checkLoopParallelWriters(workflow.steps)
   await checkGateSchemaKeys(flatSteps, cwd)
   await checkGateRenderPlaceholders(flatSteps, cwd)
   checkSandboxImage(flatSteps)
@@ -143,6 +145,127 @@ function checkMapIsolation(steps: Step[], runIsolation: RunIsolation): void {
     }
 
     checkMapIsolation([step.step], runIsolation)
+  }
+}
+
+/** `map` / `loop` / `gate` inside a loop body used to surface only once the
+ * body step actually ran (`loop.ts`'s `runBodyStepKind`). Validation already
+ * walks into bodies, so reject them at load time with that same message. */
+const UNSUPPORTED_LOOP_BODY_KINDS = new Set<Step['kind']>(['map', 'loop', 'gate'])
+
+function checkLoopBodyKinds(steps: Step[]): void {
+  for (const step of steps) {
+    if (step.kind === 'map') {
+      checkLoopBodyKinds([step.step])
+      continue
+    }
+    if (step.kind !== 'loop') continue
+    for (const bodyStep of step.body) {
+      if (UNSUPPORTED_LOOP_BODY_KINDS.has(bodyStep.kind)) {
+        throw new WorkflowValidationError(
+          `step "${bodyStep.id}": kind "${bodyStep.kind}" not supported inside a loop body in M3`,
+        )
+      }
+    }
+    checkLoopBodyKinds(step.body)
+  }
+}
+
+/** Parallel body steps share the loop's cwd, the same race `checkMapIsolation`
+ * rejects for `isolation: 'none'`. A loop opts into that race with
+ * `concurrency > 1`, so warn (the default of 1 never overlaps) when two body
+ * steps can actually run in the same round and one of them declares a
+ * write-capable tool. A later step that waits on an earlier one — directly
+ * or through other this-round producers — does not overlap it. */
+function checkLoopParallelWriters(steps: Step[]): void {
+  for (const step of steps) {
+    if (step.kind === 'loop') {
+      if (step.concurrency !== undefined && (!Number.isInteger(step.concurrency) || step.concurrency < 1)) {
+        throw new WorkflowValidationError(`step "${step.id}": concurrency must be a positive integer`)
+      }
+      warnParallelWriteCapableBody(step)
+      checkLoopParallelWriters(step.body)
+    } else if (step.kind === 'map') {
+      checkLoopParallelWriters([step.step])
+    }
+  }
+}
+
+function writeCapableTool(step: Step): string | undefined {
+  if (step.kind !== 'agent') return undefined
+  return (step.tools ?? []).find((tool) => WRITE_CAPABLE_TOOLS.has(tool))
+}
+
+function earlierProducers(
+  step: Step,
+  posIndex: number,
+  producerOf: Map<ArtifactName, StepId>,
+  order: Map<StepId, number>,
+): StepId[] {
+  const deps: StepId[] = []
+  for (const name of inputNamesOf(step)) {
+    const producerId = producerOf.get(name)
+    if (producerId === undefined) continue
+    const producerPos = order.get(producerId)
+    if (producerPos !== undefined && producerPos < posIndex) deps.push(producerId)
+  }
+  return deps
+}
+
+/** True when `step` waits, this round, on `targetId` — directly, or through
+ * other earlier body steps. Edges only point at earlier positions, so this
+ * walk terminates. */
+function waitsOn(
+  step: Step,
+  targetId: StepId,
+  stepsById: Map<StepId, Step>,
+  producerOf: Map<ArtifactName, StepId>,
+  order: Map<StepId, number>,
+): boolean {
+  const seen = new Set<StepId>()
+  const startPos = order.get(step.id)
+  if (startPos === undefined) return false
+  const stack = earlierProducers(step, startPos, producerOf, order)
+  while (stack.length > 0) {
+    const id = stack.pop()
+    if (id === undefined || seen.has(id)) continue
+    if (id === targetId) return true
+    seen.add(id)
+    const pred = stepsById.get(id)
+    const predPos = order.get(id)
+    if (!pred || predPos === undefined) continue
+    stack.push(...earlierProducers(pred, predPos, producerOf, order))
+  }
+  return false
+}
+
+function warnParallelWriteCapableBody(loop: LoopStep): void {
+  const concurrency = loop.concurrency ?? 1
+  if (concurrency <= 1 || loop.body.length < 2) return
+
+  const order = new Map(loop.body.map((bodyStep, index) => [bodyStep.id, index]))
+  const stepsById = new Map(loop.body.map((bodyStep) => [bodyStep.id, bodyStep]))
+  const producerOf = buildProducerMap(loop.body)
+  const warned = new Set<StepId>()
+
+  for (let i = 0; i < loop.body.length; i++) {
+    for (let j = i + 1; j < loop.body.length; j++) {
+      const earlier = loop.body[i]
+      const later = loop.body[j]
+      if (!earlier || !later) continue
+      if (waitsOn(later, earlier.id, stepsById, producerOf, order)) continue
+      for (const bodyStep of [earlier, later]) {
+        if (warned.has(bodyStep.id)) continue
+        const tool = writeCapableTool(bodyStep)
+        if (!tool) continue
+        console.warn(
+          `step "${loop.id}": concurrency ${concurrency} runs body steps "${earlier.id}" and "${later.id}" in parallel, ` +
+            `and "${bodyStep.id}" declares write-capable tool "${tool}" — concurrent body steps share one cwd and may race; ` +
+            `use concurrency: 1 or drop the write-capable tool`,
+        )
+        warned.add(bodyStep.id)
+      }
+    }
   }
 }
 
