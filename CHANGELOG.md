@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/lchase/yak/compare/yak-v0.5.0...yak-v0.6.0) (2026-10-25)
+
+
+### Features
+
+* run independent loop body steps in parallel ([#45](https://github.com/lchase/yak/issues/45)) ([4c3ec6b](https://github.com/lchase/yak/commit/4c3ec6b379b1098cbd08e4ffea0365881fe3d510))
+
 ## [Unreleased]
 
 ### Features
