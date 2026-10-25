@@ -118,6 +118,11 @@ export type RunIsolation = 'worktree' | 'none'
 export type JournalEvent =
   | { t: 'run.started';      runId: string; workflow: string; inputHash: string; adapter: AdapterId
                              isolation: RunIsolation; tag?: string
+                             // Commit SHA `--from` resolved to, when the run worktree was
+                             // forked from a ref other than the default HEAD. Resume reads
+                             // this and must not re-resolve the original ref. Absent on
+                             // default HEAD forks and on journals written before it existed.
+                             worktreeBase?: string
                              // yak#24: OS pid of the `yak run`/`yak resume` process, so an
                              // out-of-process `yak cancel` can signal it. Optional — journals
                              // written before yak#24 don't carry it.

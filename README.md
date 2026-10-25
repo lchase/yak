@@ -46,8 +46,11 @@ bug) for a guided walkthrough — also live at
   and journals a clean `failed`/`cancelled` terminal state, so any
   out-of-process supervisor has a supported kill.
 - **Worktree isolation:** `yak run --isolation worktree` runs the whole
-  workflow inside a fresh git worktree; `map` steps can additionally
-  isolate each item into its own sibling worktree.
+  workflow inside a fresh git worktree forked from `HEAD`. `--from <ref>`
+  forks that worktree from another commit (`origin/main`, a branch, a
+  SHA) without moving the checkout; the ref is resolved once and resume
+  reuses that commit. `map` steps can additionally isolate each item
+  into its own sibling worktree forked from the run worktree.
 - **Introspection:** `yak graph <workflow>` emits a workflow's DAG as
   Mermaid; `yak watch [<run-id>]` live-tails a run's step statuses in a
   terminal UI; `yak artifacts [<run-id>]` lists a `map` step's per-item

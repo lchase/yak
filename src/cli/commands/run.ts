@@ -18,6 +18,9 @@ export interface RunCommandOptions {
   input?: Record<string, unknown>
   /** `yak run --tag <string>` (yak#22): opaque caller correlation tag. */
   tag?: string
+  /** `yak run --isolation worktree --from <ref>`: revision the run
+   * worktree is forked from. Requires worktree isolation. */
+  from?: string
 }
 
 /**
@@ -73,6 +76,7 @@ export async function runCommand(workflowPath: string, opts: RunCommandOptions =
       isolation: opts.isolation,
       input: opts.input,
       tag: opts.tag,
+      from: opts.from,
       // yak#23: emit the run id (and worktree branch) to stderr the moment
       // `run.started` is journalled, so an out-of-process launcher can
       // capture it without waiting for a terminal state. stdout is
