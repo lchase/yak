@@ -438,6 +438,26 @@ describe('validateWorkflow', () => {
       const wf = workflow([agent({ id: 'plan', prompt: { inline: '{{issue.title}}' } })])
       await expect(validateWorkflow(wf)).rejects.toThrow(/"issue" is not in needs or context.inherit/)
     })
+
+    it('accepts null and undefined in a prompt when the artifact root is declared', async () => {
+      const wf = workflow([
+        command({ id: 'src', produces: 'verify' }),
+        agent({ id: 'plan', needs: ['verify'], prompt: { inline: '{{ verify.exitCode == null }}' } }),
+        command({ id: 'src2', produces: 'x' }),
+        agent({ id: 'plan2', needs: ['x'], prompt: { inline: '{{ x || undefined }}' } }),
+      ])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
+
+    it('still rejects a typo root in a prompt that also mentions null', async () => {
+      const wf = workflow([
+        command({ id: 'src', produces: 'verify' }),
+        agent({ id: 'plan', needs: ['verify'], prompt: { inline: '{{ verfy.exitCode == null }}' } }),
+      ])
+      await expect(validateWorkflow(wf)).rejects.toThrow(
+        /prompt references "\{\{verfy\}\}" but "verfy" is not in needs or context.inherit/,
+      )
+    })
   })
 
   describe('context.session chain depth', () => {

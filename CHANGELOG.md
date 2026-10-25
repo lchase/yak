@@ -15,6 +15,7 @@
 
 ### Bug Fixes
 
+* prompt placeholders do not treat jexl `null` and `undefined` as artifact roots (`{{ verify.exitCode == null }}`, `{{ x || undefined }}`); a misspelled identifier is still rejected
 * a loop body whose effective concurrency is 1 runs in declared order, so a later step does not jump an earlier sibling that is still waiting
 * prompt placeholders validate every identifier outside string literals (`{{ !x }}`, `{{ x || secrity }}`, `{{ fn(x) }}`); names after `.` and jexl `|` transforms are not roots
 

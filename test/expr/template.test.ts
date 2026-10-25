@@ -79,4 +79,14 @@ describe('extractTemplateRoots', () => {
     expect(extractTemplateRoots('{{ review.approved == true }}')).toEqual(['review'])
     expect(extractTemplateRoots('{{ item in items }}')).toEqual(['item', 'items'])
   })
+
+  it('does not treat null or undefined as artifact roots', () => {
+    expect(extractTemplateRoots('{{ verify.exitCode == null }}')).toEqual(['verify'])
+    expect(extractTemplateRoots('{{ x || undefined }}')).toEqual(['x'])
+  })
+
+  it('still collects a typo root beside null or undefined', () => {
+    expect(extractTemplateRoots('{{ verfy.exitCode == null }}')).toEqual(['verfy'])
+    expect(extractTemplateRoots('{{ x || undefind }}')).toEqual(['x', 'undefind'])
+  })
 })
