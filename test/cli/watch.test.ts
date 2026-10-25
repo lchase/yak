@@ -1,13 +1,19 @@
+import { Console } from 'node:console'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { watchCommand } from '../../src/cli/commands/watch.js'
 import { executeWorkflowFile } from '../../src/engine/run.js'
 
 const CI_WORKFLOW = path.join(process.cwd(), 'test', 'workflows', 'ci.yaml')
 
 describe('yak watch (CLI)', () => {
+  // vitest 5 swaps in a console without `Console`, which ink's patchConsole constructs.
+  beforeAll(() => {
+    console.Console ??= Console
+  })
+
   it('exits 0 for an already-finished run — the first read already has run.finished', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'yak-watch-'))
     const runsDir = path.join(dir, '.runs')

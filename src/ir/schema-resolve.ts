@@ -1,8 +1,7 @@
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv'
-import { ZodBoolean, ZodDefault, ZodEnum, ZodNumber, ZodObject, ZodOptional, ZodString, ZodType, type ZodError } from 'zod'
-import { zodToJsonSchema } from 'zod-to-json-schema'
+import { ZodBoolean, ZodDefault, ZodEnum, ZodNumber, ZodObject, ZodOptional, ZodString, ZodType, toJSONSchema, type ZodError } from 'zod'
 import type { JSONSchema } from './types.js'
 
 /** `AgentStep.schema` / `GateStep.schema`: a named ref into `.yak/schemas.ts`
@@ -24,7 +23,7 @@ export interface FlatAnswerCheck {
 /** One shape both branches resolve to, so `agent.ts`/`gate.ts`/`validate.ts`
  * never need to know which branch produced a step's schema. */
 export interface ResolvedSchema {
-  toJsonSchema(name?: string): object
+  toJsonSchema(): object
   safeParse(value: unknown): SchemaParseResult
   /** Parses `{}` through the schema, applying defaults — gate's `skipIf`
    * auto-answer path. */
@@ -53,8 +52,8 @@ function formatZodError(error: ZodError): string {
 class ZodResolvedSchema implements ResolvedSchema {
   constructor(private readonly schema: ZodType) {}
 
-  toJsonSchema(name?: string): object {
-    return name === undefined ? zodToJsonSchema(this.schema) : zodToJsonSchema(this.schema, name)
+  toJsonSchema(): object {
+    return toJSONSchema(this.schema)
   }
 
   safeParse(value: unknown): SchemaParseResult {
@@ -74,7 +73,7 @@ class ZodResolvedSchema implements ResolvedSchema {
     for (const [field, fieldSchemaRaw] of Object.entries(this.schema.shape as Record<string, ZodType>)) {
       let fieldSchema: ZodType = fieldSchemaRaw
       while (fieldSchema instanceof ZodOptional || fieldSchema instanceof ZodDefault) {
-        fieldSchema = fieldSchema instanceof ZodOptional ? fieldSchema.unwrap() : fieldSchema._def.innerType
+        fieldSchema = fieldSchema.unwrap() as ZodType
       }
       const isScalar =
         fieldSchema instanceof ZodString || fieldSchema instanceof ZodNumber || fieldSchema instanceof ZodBoolean

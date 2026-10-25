@@ -63,8 +63,7 @@ describe('resolveSchemaSpec (inline)', () => {
 describe('toJsonSchema', () => {
   it('converts a resolved named-ref ZodType into JSON Schema', async () => {
     const schema = await resolveSchemaSpec('PlanSchema', cwd)
-    const jsonSchema = schema.toJsonSchema('PlanSchema') as { definitions: Record<string, unknown> }
-    expect(jsonSchema.definitions['PlanSchema']).toMatchObject({
+    expect(schema.toJsonSchema()).toMatchObject({
       type: 'object',
       required: ['summary'],
     })
