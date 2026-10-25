@@ -1,11 +1,13 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readJournal } from '../../src/engine/journal.js'
 import { executeWorkflowFile, readRunWorkflow, resumeRun } from '../../src/engine/run.js'
 import { loopStatusFromJournal } from '../../src/engine/status.js'
-import type { LoopStep } from '../../src/ir/types.js'
+import { normalizeWorkflow } from '../../src/ir/normalize.js'
+import type { JournalEnvelope, LoopStep, Step } from '../../src/ir/types.js'
+import { validateWorkflow } from '../../src/ir/validate.js'
 
 const LOOP_SUCCESS_WORKFLOW = path.join(process.cwd(), 'test', 'workflows', 'loop-success.yaml')
 const LOOP_BUDGET_EXHAUSTED_WORKFLOW = path.join(
@@ -281,5 +283,804 @@ describe('yak#35: a loop step with `produces` writes its own artifact', () => {
     const events = await readJournal(first.runDir)
     const testStarted = events.filter((e) => e.t === 'step.started' && e.stepId === 'test')
     expect(testStarted).toHaveLength(3)
+  })
+})
+
+describe('loop body parallelism', () => {
+  const runsDir = () => path.join(dir, '.runs')
+
+  async function writeTransforms(): Promise<void> {
+    await mkdir(path.join(cwd, '.yak'), { recursive: true })
+    await writeFile(
+      path.join(cwd, '.yak', 'transforms.ts'),
+      [
+        'export function joinReviews(inputs) {',
+        '  return { ok: true, security: inputs.security, ux: inputs.ux, ui: inputs.ui }',
+        '}',
+        'export function recordPrior(inputs) {',
+        '  const ticket = inputs.ticket',
+        "  const stdout = ticket && typeof ticket.stdout === 'string' ? ticket.stdout.trim() : null",
+        '  return { hadPrior: ticket !== undefined, stdout }',
+        '}',
+        'export function recordAll(inputs) {',
+        '  return {',
+        '    hadPrior: inputs.security !== undefined,',
+        '    security: inputs.security === undefined ? null : inputs.security,',
+        '    ux: inputs.ux === undefined ? null : inputs.ux,',
+        '    code: inputs.code === undefined ? null : inputs.code,',
+        '  }',
+        '}',
+      ].join('\n'),
+      'utf8',
+    )
+  }
+
+  async function writeFixture(workflow: string, stepId: string, entries: unknown[]): Promise<void> {
+    const fixtureDir = path.join(cwd, 'test', 'fixtures', workflow)
+    await mkdir(fixtureDir, { recursive: true })
+    await writeFile(path.join(fixtureDir, `${stepId}.json`), JSON.stringify(entries), 'utf8')
+  }
+
+  async function writeWorkflow(fileName: string, lines: string[]): Promise<string> {
+    const workflowPath = path.join(cwd, fileName)
+    await writeFile(workflowPath, lines.join('\n'), 'utf8')
+    return workflowPath
+  }
+
+  function eventIndex(events: JournalEnvelope[], t: JournalEnvelope['t'], stepId: string): number {
+    return events.findIndex((event) => event.t === t && 'stepId' in event && event.stepId === stepId)
+  }
+
+  function startedSteps(events: JournalEnvelope[], stepId: string) {
+    return events.filter(
+      (event): event is Extract<JournalEnvelope, { t: 'step.started' }> =>
+        event.t === 'step.started' && event.stepId === stepId,
+    )
+  }
+
+  function completedSteps(events: JournalEnvelope[], stepId: string) {
+    return events.filter(
+      (event): event is Extract<JournalEnvelope, { t: 'step.completed' }> =>
+        event.t === 'step.completed' && event.stepId === stepId,
+    )
+  }
+
+  async function readIter(runDir: string, name: string, iteration: number): Promise<unknown> {
+    return JSON.parse(await readFile(path.join(runDir, 'artifacts', `${name}.${iteration}.json`), 'utf8'))
+  }
+
+  it('starts three siblings with concurrency 3 before any of them finishes', async () => {
+    const workflowPath = await writeWorkflow('overlap.yaml', [
+      'name: loop-overlap',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      concurrency: 3',
+      '      until: "true"',
+      '      budget:',
+      '        maxIterations: 1',
+      '      body:',
+      '        - id: security',
+      '          command: { run: "sleep 0.3 && echo sec", capture: [stdout] }',
+      '          produces: security',
+      '        - id: ux',
+      '          command: { run: "sleep 0.3 && echo ux", capture: [stdout] }',
+      '          produces: ux',
+      '        - id: ui',
+      '          command: { run: "sleep 0.3 && echo ui", capture: [stdout] }',
+      '          produces: ui',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('ok')
+
+    const events = await readJournal(result.runDir)
+    const starts = ['security', 'ux', 'ui'].map((id) => eventIndex(events, 'step.started', id))
+    const dones = ['security', 'ux', 'ui'].map((id) => eventIndex(events, 'step.completed', id))
+    const firstDone = Math.min(...dones)
+    for (const start of starts) {
+      expect(start).toBeGreaterThanOrEqual(0)
+      expect(start).toBeLessThan(firstDone)
+    }
+  })
+
+  it('runs a step that needs all three last and gives it this round\'s values', async () => {
+    await writeTransforms()
+    await writeFixture('loop-parallel-join', 'security', [{ output: { findings: 'sec' } }])
+    await writeFixture('loop-parallel-join', 'ux', [{ output: { findings: 'ux' } }])
+    await writeFixture('loop-parallel-join', 'ui', [{ output: { findings: 'ui' } }])
+    const workflowPath = await writeWorkflow('join.yaml', [
+      'name: loop-parallel-join',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      concurrency: 3',
+      '      until: "joined.ok == true"',
+      '      budget:',
+      '        maxIterations: 1',
+      '      body:',
+      '        - id: security',
+      '          agent:',
+      '            prompt: { inline: "review security" }',
+      '          produces: security',
+      '        - id: ux',
+      '          agent:',
+      '            prompt: { inline: "review ux" }',
+      '          produces: ux',
+      '        - id: ui',
+      '          agent:',
+      '            prompt: { inline: "review ui" }',
+      '          produces: ui',
+      '        - id: join',
+      '          needs: [security, ux, ui]',
+      '          transform: { fn: joinReviews }',
+      '          produces: joined',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('ok')
+
+    const events = await readJournal(result.runDir)
+    const joinStart = eventIndex(events, 'step.started', 'join')
+    for (const id of ['security', 'ux', 'ui']) {
+      expect(joinStart).toBeGreaterThan(eventIndex(events, 'step.completed', id))
+    }
+
+    expect(await readIter(result.runDir, 'joined', 1)).toEqual({
+      ok: true,
+      security: { findings: 'sec' },
+      ux: { findings: 'ux' },
+      ui: { findings: 'ui' },
+    })
+  })
+
+  it('keeps declared order when concurrency is left at the default', async () => {
+    const workflowPath = await writeWorkflow('serial.yaml', [
+      'name: loop-serial',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      until: "true"',
+      '      budget:',
+      '        maxIterations: 1',
+      '      body:',
+      '        - id: security',
+      '          command: { run: "echo sec" }',
+      '          produces: security',
+      '        - id: ux',
+      '          command: { run: "echo ux" }',
+      '          produces: ux',
+      '        - id: ui',
+      '          command: { run: "echo ui" }',
+      '          produces: ui',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('ok')
+
+    const events = await readJournal(result.runDir)
+    const order = ['security', 'ux', 'ui'].flatMap((id) => [
+      eventIndex(events, 'step.started', id),
+      eventIndex(events, 'step.completed', id),
+    ])
+    const sorted = [...order].sort((a, b) => a - b)
+    expect(order).toEqual(sorted)
+    expect(new Set(order).size).toBe(order.length)
+  })
+
+  it('runs [a, b needs a, c] in declared order at the default concurrency', async () => {
+    const workflowPath = await writeWorkflow('declared.yaml', [
+      'name: loop-declared',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      until: "true"',
+      '      budget:',
+      '        maxIterations: 1',
+      '      body:',
+      '        - id: a',
+      '          command: { run: "echo a" }',
+      '          produces: a',
+      '        - id: b',
+      '          needs: [a]',
+      '          command: { run: "echo b" }',
+      '          produces: b',
+      '        - id: c',
+      '          command: { run: "echo c" }',
+      '          produces: c',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('ok')
+
+    const events = await readJournal(result.runDir)
+    const order = ['a', 'b', 'c'].flatMap((id) => [
+      eventIndex(events, 'step.started', id),
+      eventIndex(events, 'step.completed', id),
+    ])
+    expect(order).toEqual([...order].sort((left, right) => left - right))
+    expect(new Set(order).size).toBe(order.length)
+  })
+
+  it('at concurrency 2 lets c overtake b while b is still waiting on a', async () => {
+    const workflowPath = await writeWorkflow('overtake.yaml', [
+      'name: loop-overtake',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      concurrency: 2',
+      '      until: "true"',
+      '      budget:',
+      '        maxIterations: 1',
+      '      body:',
+      '        - id: a',
+      '          command: { run: "sleep 0.3 && echo a" }',
+      '          produces: a',
+      '        - id: b',
+      '          needs: [a]',
+      '          command: { run: "echo b" }',
+      '          produces: b',
+      '        - id: c',
+      '          command: { run: "echo c" }',
+      '          produces: c',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('ok')
+
+    const events = await readJournal(result.runDir)
+    const aDone = eventIndex(events, 'step.completed', 'a')
+    const bStart = eventIndex(events, 'step.started', 'b')
+    const cStart = eventIndex(events, 'step.started', 'c')
+    const cDone = eventIndex(events, 'step.completed', 'c')
+    // c does not depend on a or b, so it runs in the first wave with a
+    // and finishes while a is still sleeping. b waits for a, so it starts
+    // only after c has already finished. a and c start together; their
+    // step.started writes are not ordered against each other.
+    expect(cStart).toBeGreaterThanOrEqual(0)
+    expect(cDone).toBeLessThan(aDone)
+    expect(bStart).toBeGreaterThan(aDone)
+    expect(cStart).toBeLessThan(bStart)
+  })
+
+  it('resolves a backward input to the previous round, undefined on round 1', async () => {
+    await writeTransforms()
+    await writeFixture('loop-backward', 'narrator', [{ output: { ok: true } }])
+    const producerRun =
+      'c=$(cat counter 2>/dev/null || echo 0); c=$((c+1)); echo $c > counter; echo round$c'
+    const workflowPath = await writeWorkflow('backward.yaml', [
+      'name: loop-backward',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      concurrency: 3',
+      '      until: "seen.hadPrior == true"',
+      '      budget:',
+      '        maxIterations: 4',
+      '      body:',
+      '        - id: blocker',
+      '          command: { run: "sleep 0.25 && echo go", capture: [stdout] }',
+      '          produces: gate',
+      '        - id: lookback',
+      '          needs: [gate, ticket]',
+      '          transform: { fn: recordPrior }',
+      '          produces: seen',
+      '        - id: narrator',
+      '          needs: [ticket]',
+      '          agent:',
+      '            prompt:',
+      '              inline: \'prior {{ ticket || "none yet" }}\'',
+      '          produces: narration',
+      '        - id: producer',
+      `          command: { run: "${producerRun}", capture: [stdout] }`,
+      '          produces: ticket',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('ok')
+
+    expect(await readIter(result.runDir, 'seen', 1)).toEqual({ hadPrior: false, stdout: null })
+    expect(await readIter(result.runDir, 'seen', 2)).toEqual({ hadPrior: true, stdout: 'round1' })
+    const round2 = (await readIter(result.runDir, 'ticket', 2)) as { stdout: string }
+    expect(round2.stdout.trim()).toBe('round2')
+  })
+
+  it('records exactly one loop failure and starts nothing new after a sibling fails', async () => {
+    const workflowPath = await writeWorkflow('fail.yaml', [
+      'name: loop-fail-sibling',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      concurrency: 2',
+      '      until: "true"',
+      '      budget:',
+      '        maxIterations: 2',
+      '      body:',
+      '        - id: slow-ok',
+      '          command: { run: "sleep 0.4 && echo ok", capture: [stdout] }',
+      '          produces: slow',
+      '        - id: fail-fast',
+      '          command: { run: "exit 1" }',
+      '        - id: never',
+      '          command: { run: "echo should-not-run" }',
+      '          produces: never',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('failed')
+
+    const events = await readJournal(result.runDir)
+    const loopFailures = events.filter((event) => event.t === 'step.failed' && event.stepId === 'revise')
+    expect(loopFailures).toHaveLength(1)
+    expect(events.filter((event) => event.t === 'step.failed' && event.stepId === 'fail-fast')).toHaveLength(1)
+    expect(events.some((event) => event.t === 'step.started' && event.stepId === 'never')).toBe(false)
+    expect(events.some((event) => event.t === 'step.started' && event.stepId === 'slow-ok')).toBe(true)
+    expect(eventIndex(events, 'step.completed', 'slow-ok')).toBeGreaterThanOrEqual(0)
+    expect(eventIndex(events, 'step.completed', 'slow-ok')).toBeLessThan(eventIndex(events, 'step.failed', 'revise'))
+  })
+
+  it('resumes a budget stop with a parallel body and keeps each round on its own cache key', async () => {
+    await writeTransforms()
+    for (const [stepId, findings] of [
+      ['security', 'sec'],
+      ['ux', 'ux'],
+      ['code', 'code'],
+    ] as const) {
+      await writeFixture('loop-parallel-resume', stepId, [
+        { output: { findings: `${findings}-1` } },
+        { output: { findings: `${findings}-2` } },
+      ])
+    }
+    const workflowPath = await writeWorkflow('resume.yaml', [
+      'name: loop-parallel-resume',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      concurrency: 4',
+      '      until: "seen.hadPrior == true"',
+      '      budget:',
+      '        maxIterations: 1',
+      '      body:',
+      '        - id: blocker',
+      '          command: { run: "sleep 0.25 && echo go", capture: [stdout] }',
+      '          produces: gate',
+      '        - id: lookback',
+      '          needs: [gate, security, ux, code]',
+      '          transform: { fn: recordAll }',
+      '          produces: seen',
+      '        - id: security',
+      '          agent:',
+      '            prompt: { inline: "review security" }',
+      '          produces: security',
+      '        - id: ux',
+      '          agent:',
+      '            prompt: { inline: "review ux" }',
+      '          produces: ux',
+      '        - id: code',
+      '          agent:',
+      '            prompt: { inline: "review code" }',
+      '          produces: code',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('suspended')
+    expect(await readIter(result.runDir, 'seen', 1)).toEqual({
+      hadPrior: false,
+      security: null,
+      ux: null,
+      code: null,
+    })
+
+    await mkdir(path.join(result.runDir, 'pending'), { recursive: true })
+    await writeFile(
+      path.join(result.runDir, 'pending', 'revise.answer.json'),
+      JSON.stringify({ action: 'continue', addIterations: 1 }),
+      'utf8',
+    )
+
+    const resumed = await resumeRun(result.runId, { runsDir: runsDir(), cwd })
+    expect(resumed.status).toBe('ok')
+    expect(await readIter(result.runDir, 'seen', 2)).toEqual({
+      hadPrior: true,
+      security: { findings: 'sec-1' },
+      ux: { findings: 'ux-1' },
+      code: { findings: 'code-1' },
+    })
+    expect(await readIter(result.runDir, 'security', 2)).toEqual({ findings: 'sec-2' })
+
+    const events = await readJournal(result.runDir)
+    expect(events.some((event) => event.t === 'gate.answered' && event.stepId === 'revise')).toBe(true)
+    for (const id of ['security', 'ux', 'code']) {
+      const starts = startedSteps(events, id)
+      expect(starts.map((event) => event.iteration)).toEqual([1, 2])
+      expect(starts[0]?.semanticKey).not.toBe(starts[1]?.semanticKey)
+      const round2 = completedSteps(events, id).find((event) => event.iteration === 2)
+      expect(round2).toMatchObject({ cached: false })
+    }
+  })
+
+  it('reuses per-round cache entries on a second run and does not reuse them across rounds', async () => {
+    await writeFixture('loop-round-cache', 'reviewer', [{ output: { note: 'same' } }])
+    const workflowPath = await writeWorkflow('cache.yaml', [
+      'name: loop-round-cache',
+      'version: "1"',
+      'steps:',
+      '  - id: revise',
+      '    loop:',
+      '      until: "false"',
+      '      onExhausted: continue',
+      '      budget:',
+      '        maxIterations: 2',
+      '      body:',
+      '        - id: reviewer',
+      '          agent:',
+      '            prompt: { inline: "review" }',
+      '          produces: notes',
+    ])
+
+    const first = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(first.status).toBe('ok')
+    const firstEvents = await readJournal(first.runDir)
+    const firstCompleted = completedSteps(firstEvents, 'reviewer')
+    expect(firstCompleted.map((event) => event.iteration)).toEqual([1, 2])
+    expect(firstCompleted.every((event) => event.cached === false)).toBe(true)
+    const firstStarted = startedSteps(firstEvents, 'reviewer')
+    expect(firstStarted[0]?.semanticKey).not.toBe(firstStarted[1]?.semanticKey)
+
+    const second = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(second.status).toBe('ok')
+    const secondEvents = await readJournal(second.runDir)
+    const secondCompleted = completedSteps(secondEvents, 'reviewer')
+    expect(secondCompleted.map((event) => ({ iteration: event.iteration, cached: event.cached }))).toEqual([
+      { iteration: 1, cached: true },
+      { iteration: 2, cached: true },
+    ])
+    const secondStarted = startedSteps(secondEvents, 'reviewer')
+    expect(secondStarted.map((event) => event.semanticKey)).toEqual(firstStarted.map((event) => event.semanticKey))
+  })
+
+  it('resumes after a gate and then runs a parallel body', async () => {
+    await writeTransforms()
+    await writeFixture('loop-after-gate', 'security', [{ output: { findings: 'sec' } }])
+    await writeFixture('loop-after-gate', 'ux', [{ output: { findings: 'ux' } }])
+    await writeFixture('loop-after-gate', 'ui', [{ output: { findings: 'ui' } }])
+    const workflowPath = await writeWorkflow('after-gate.yaml', [
+      'name: loop-after-gate',
+      'version: "1"',
+      'steps:',
+      '  - id: approve',
+      '    gate:',
+      '      schema:',
+      '        inline:',
+      '          type: object',
+      '          properties:',
+      '            decision: { type: string, enum: [approve, reject] }',
+      '            notes: { type: string }',
+      '          required: [decision]',
+      '      render: { inline: "Approve this change?" }',
+      '    produces: decision',
+      '  - id: revise',
+      '    needs: [decision]',
+      '    loop:',
+      '      concurrency: 3',
+      '      until: "joined.ok == true"',
+      '      budget:',
+      '        maxIterations: 2',
+      '      body:',
+      '        - id: security',
+      '          agent:',
+      '            prompt: { inline: "review security" }',
+      '          produces: security',
+      '        - id: ux',
+      '          agent:',
+      '            prompt: { inline: "review ux" }',
+      '          produces: ux',
+      '        - id: ui',
+      '          agent:',
+      '            prompt: { inline: "review ui" }',
+      '          produces: ui',
+      '        - id: join',
+      '          needs: [security, ux, ui]',
+      '          transform: { fn: joinReviews }',
+      '          produces: joined',
+    ])
+
+    const result = await executeWorkflowFile(workflowPath, { runsDir: runsDir(), cwd, adapter: 'mock' })
+    expect(result.status).toBe('suspended')
+    const before = await readJournal(result.runDir)
+    expect(before.some((event) => event.t === 'step.started' && event.stepId === 'security')).toBe(false)
+
+    await mkdir(path.join(result.runDir, 'pending'), { recursive: true })
+    await writeFile(
+      path.join(result.runDir, 'pending', 'approve.answer.json'),
+      JSON.stringify({ decision: 'approve' }),
+      'utf8',
+    )
+
+    const resumed = await resumeRun(result.runId, { runsDir: runsDir(), cwd })
+    expect(resumed.status).toBe('ok')
+    expect(await readIter(result.runDir, 'joined', 1)).toEqual({
+      ok: true,
+      security: { findings: 'sec' },
+      ux: { findings: 'ux' },
+      ui: { findings: 'ui' },
+    })
+
+    const events = await readJournal(result.runDir)
+    const joinStart = eventIndex(events, 'step.started', 'join')
+    for (const id of ['security', 'ux', 'ui']) {
+      expect(joinStart).toBeGreaterThan(eventIndex(events, 'step.completed', id))
+    }
+  })
+})
+
+describe('loop concurrency parse and validate', () => {
+  function workflow(steps: Step[]) {
+    return { name: 'w', version: '1', steps }
+  }
+
+  function rawLoop(concurrency?: number) {
+    return {
+      name: 'w',
+      version: '1',
+      steps: [
+        {
+          id: 'revise',
+          loop: {
+            ...(concurrency !== undefined ? { concurrency } : {}),
+            until: 'true',
+            budget: { maxIterations: 1 },
+            body: [{ id: 'a', command: { run: 'true' } }],
+          },
+        },
+      ],
+    }
+  }
+
+  it('defaults concurrency to 1 and accepts a positive integer', () => {
+    const omitted = normalizeWorkflow(rawLoop())
+    expect((omitted.steps[0] as LoopStep).concurrency).toBe(1)
+
+    const set = normalizeWorkflow(rawLoop(4))
+    expect((set.steps[0] as LoopStep).concurrency).toBe(4)
+  })
+
+  it('rejects a non-positive or non-integer concurrency at parse time', () => {
+    expect(() => normalizeWorkflow(rawLoop(0))).toThrow(/concurrency/)
+    expect(() => normalizeWorkflow(rawLoop(-2))).toThrow(/concurrency/)
+    expect(() => normalizeWorkflow(rawLoop(1.5))).toThrow(/concurrency/)
+  })
+
+  it('rejects map, loop, and gate inside a body at load time', async () => {
+    const cases: { kind: 'map' | 'loop' | 'gate'; body: Step }[] = [
+      {
+        kind: 'map',
+        body: { id: 'fan', kind: 'map', over: 'items', step: { id: 'one', kind: 'command', run: 'true' } },
+      },
+      {
+        kind: 'loop',
+        body: {
+          id: 'inner',
+          kind: 'loop',
+          until: 'true',
+          budget: { maxIterations: 1 },
+          body: [{ id: 'a', kind: 'command', run: 'true' }],
+        },
+      },
+      {
+        kind: 'gate',
+        body: {
+          id: 'approve',
+          kind: 'gate',
+          schema: { inline: { type: 'object' } },
+          render: { inline: 'go?' },
+        },
+      },
+    ]
+
+    for (const { kind, body } of cases) {
+      const step: LoopStep = {
+        id: 'revise',
+        kind: 'loop',
+        until: 'true',
+        budget: { maxIterations: 1 },
+        body: [body],
+      }
+      await expect(validateWorkflow(workflow([step]))).rejects.toThrow(
+        `step "${body.id}": kind "${kind}" not supported inside a loop body in M3`,
+      )
+    }
+  })
+
+  it('accepts {{ name || "default" }} when the leading identifier is a declared need', async () => {
+    const raw = normalizeWorkflow({
+      name: 'w',
+      version: '1',
+      steps: [
+        {
+          id: 'revise',
+          loop: {
+            until: 'true',
+            budget: { maxIterations: 1 },
+            body: [
+              {
+                id: 'security',
+                needs: ['security'],
+                produces: 'security',
+                agent: { prompt: { inline: '{{ security || "none yet" }}' } },
+              },
+            ],
+          },
+        },
+      ],
+    })
+    await expect(validateWorkflow(raw)).resolves.toBeUndefined()
+  })
+
+  it('rejects an or-default whose other operand is an undeclared identifier', async () => {
+    const raw = normalizeWorkflow({
+      name: 'w',
+      version: '1',
+      steps: [
+        {
+          id: 'revise',
+          loop: {
+            until: 'true',
+            budget: { maxIterations: 1 },
+            body: [
+              {
+                id: 'security',
+                needs: ['security'],
+                produces: 'security',
+                agent: { prompt: { inline: '{{ security || secrity }}' } },
+              },
+            ],
+          },
+        },
+      ],
+    })
+    await expect(validateWorkflow(raw)).rejects.toThrow(/prompt references "\{\{secrity\}\}"/)
+  })
+
+  it('still rejects an or-default whose leading identifier is not a declared need', async () => {
+    const raw = normalizeWorkflow({
+      name: 'w',
+      version: '1',
+      steps: [
+        {
+          id: 'revise',
+          loop: {
+            until: 'true',
+            budget: { maxIterations: 1 },
+            body: [
+              {
+                id: 'security',
+                needs: ['security'],
+                produces: 'security',
+                agent: { prompt: { inline: '{{ missing || "x" }}' } },
+              },
+            ],
+          },
+        },
+      ],
+    })
+    await expect(validateWorkflow(raw)).rejects.toThrow(/prompt references "\{\{missing\}\}"/)
+  })
+
+  it('warns when parallel body siblings declare a write-capable tool', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const step: LoopStep = {
+      id: 'revise',
+      kind: 'loop',
+      concurrency: 4,
+      until: 'true',
+      budget: { maxIterations: 1 },
+      body: [
+        { id: 'security', kind: 'agent', prompt: { inline: 'review' }, tools: ['Read', 'Edit'], produces: 'security' },
+        { id: 'ux', kind: 'agent', prompt: { inline: 'review' }, tools: ['Read'], produces: 'ux' },
+      ],
+    }
+    await expect(validateWorkflow(workflow([step]))).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/write-capable tool "Edit"/))
+    warn.mockRestore()
+  })
+
+  it('warns for Bash, and stays quiet when siblings cannot overlap or concurrency is 1', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const parallelBash: LoopStep = {
+      id: 'revise',
+      kind: 'loop',
+      concurrency: 2,
+      until: 'true',
+      budget: { maxIterations: 1 },
+      body: [
+        { id: 'security', kind: 'agent', prompt: { inline: 'review' }, tools: ['Bash'], produces: 'security' },
+        { id: 'ux', kind: 'agent', prompt: { inline: 'review' }, tools: ['Read'], produces: 'ux' },
+      ],
+    }
+    await validateWorkflow(workflow([parallelBash]))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/write-capable tool "Bash"/))
+    warn.mockClear()
+
+    const ordered: LoopStep = {
+      id: 'revise',
+      kind: 'loop',
+      concurrency: 4,
+      until: 'true',
+      budget: { maxIterations: 1 },
+      body: [
+        { id: 'implement', kind: 'agent', prompt: { inline: 'build' }, tools: ['Edit'], produces: 'code' },
+        {
+          id: 'review',
+          kind: 'agent',
+          needs: ['code'],
+          prompt: { inline: 'review' },
+          tools: ['Edit'],
+          produces: 'review',
+        },
+      ],
+    }
+    await validateWorkflow(workflow([ordered]))
+
+    const readOnly: LoopStep = {
+      id: 'revise',
+      kind: 'loop',
+      concurrency: 4,
+      until: 'true',
+      budget: { maxIterations: 1 },
+      body: [
+        { id: 'security', kind: 'agent', prompt: { inline: 'review' }, tools: ['Read', 'Grep'], produces: 'security' },
+        { id: 'ux', kind: 'agent', prompt: { inline: 'review' }, tools: ['Read'], produces: 'ux' },
+      ],
+    }
+    await validateWorkflow(workflow([readOnly]))
+
+    const serial: LoopStep = {
+      id: 'revise',
+      kind: 'loop',
+      concurrency: 1,
+      until: 'true',
+      budget: { maxIterations: 1 },
+      body: [
+        { id: 'security', kind: 'agent', prompt: { inline: 'review' }, tools: ['Edit'], produces: 'security' },
+        { id: 'ux', kind: 'agent', prompt: { inline: 'review' }, tools: ['Write'], produces: 'ux' },
+      ],
+    }
+    await validateWorkflow(workflow([serial]))
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('warns when a parallel command step shares the cwd', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const body = [
+      { id: 'build', kind: 'command' as const, run: 'npm test', produces: 'build' },
+      { id: 'lint', kind: 'command' as const, run: 'npm run lint', produces: 'lint' },
+    ]
+    const parallel: LoopStep = {
+      id: 'revise',
+      kind: 'loop',
+      concurrency: 2,
+      until: 'true',
+      budget: { maxIterations: 1 },
+      body,
+    }
+    await validateWorkflow(workflow([parallel]))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/"build" is a command step/))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/"lint" is a command step/))
+    warn.mockClear()
+
+    const serial: LoopStep = { ...parallel, concurrency: 1 }
+    await validateWorkflow(workflow([serial]))
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })

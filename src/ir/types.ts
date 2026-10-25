@@ -77,6 +77,10 @@ export interface LoopStep extends BaseStep {
   body: Step[]
   until: Expr
   budget: Budget
+  concurrency?: number                 // default 1 — body steps whose inputs
+                                       // don't come from an earlier sibling
+                                       // run in parallel, capped by the run's
+                                       // global concurrency
   onExhausted?: 'suspend' | 'fail' | 'continue'   // default 'suspend'
   freshContext?: boolean               // default true
 }

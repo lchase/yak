@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict'
+import pLimit from 'p-limit'
 import { z } from 'zod'
 import type { AgentAdapter } from '../adapters/types.js'
 import { readArtifactRaw, writeArtifact } from '../engine/artifacts.js'
@@ -11,7 +13,7 @@ import {
 import { appendJournalEvent, readJournal } from '../engine/journal.js'
 import { writeLoopExhaustedRequest } from '../engine/suspend.js'
 import { evalExpr } from '../expr/eval.js'
-import { buildProducerMap, inputNamesOf } from '../ir/graph.js'
+import { buildProducerMap, earlierProducerIds, inputNamesOf } from '../ir/graph.js'
 import type { AgentStep, ArtifactName, LoopStep, Step, StepId } from '../ir/types.js'
 import { AgentStepFailedError, runAgentStep } from './agent.js'
 import { CommandResultSchema, CommandStepFailedError, runCommandStep } from './command.js'
@@ -28,6 +30,10 @@ export interface LoopRunContext {
    * other step kind's do. */
   semanticKey: string
   definitionKey: string
+  /** Same cap the top-level scheduler is running under. `step.concurrency`
+   * (default 1) is a sub-limit inside this, never above it — the same
+   * relationship `map` has with `globalConcurrency`. */
+  globalConcurrency: number
   /** Hashes of artifacts produced outside this loop, already on disk under
    * their flat (non-iteration) path — an external need's contribution to a
    * body step's cache key. */
@@ -48,9 +54,18 @@ interface ResumeFrom {
 
 /** Ticket 01/02/03/04/10: runs a `loop` step to completion — success
  * (`until` satisfied), budget exhaustion (`onExhausted`), or a body step's
- * hard failure. Body steps execute strictly in declared order each
- * iteration (never fanned out or reordered) — spec's `loop` bounds
- * iteration, it isn't a scheduler of its own.
+ * hard failure. Each round schedules the body as a subgraph: a step waits
+ * only on producers of its inputs that appear earlier in the body (this
+ * round's value — the same rule `runOneBodyStep` uses below). A producer
+ * at the same or a later body position still resolves to the previous
+ * round (`undefined` on round 1). The effective cap is
+ * `min(concurrency ?? 1, globalConcurrency)`. When that cap is 1 the body
+ * runs in declared order, including when `concurrency` is higher but the
+ * global cap clips it to 1. When the cap is greater than 1, a step may
+ * start before an earlier sibling that is not ready yet, if it does not
+ * depend on that sibling. On the first body
+ * failure nothing new starts; steps already running finish, then the
+ * error is rethrown.
  *
  * Ticket 09: brackets the loop id itself with the same `step.started`/
  * `step.completed`-or-`step.failed` shape every other step kind gets, so
@@ -178,22 +193,18 @@ async function runLoopBody(
     const thisHashes = new Map<ArtifactName, string>()
 
     try {
-      for (const [posIndex, bodyStep] of step.body.entries()) {
-        await runOneBodyStep({
-          bodyStep,
-          posIndex,
-          iteration,
-          ctx,
-          localProducerOf,
-          bodyOrderIndex,
-          priorValues,
-          priorHashes,
-          thisValues,
-          thisHashes,
-          freshContext: step.freshContext ?? true,
-          bodySessionIds,
-        })
-      }
+      await runLoopRound({
+        step,
+        iteration,
+        ctx,
+        localProducerOf,
+        bodyOrderIndex,
+        priorValues,
+        priorHashes,
+        thisValues,
+        thisHashes,
+        bodySessionIds,
+      })
     } catch (err) {
       if (err instanceof CommandStepFailedError || err instanceof AgentStepFailedError) {
         // the body step's own step.failed was already journaled in
@@ -317,6 +328,128 @@ async function handleExhausted(
   })
   await writeLoopExhaustedRequest(ctx.runDir, ctx.runId, step.id, iteration, tripped)
   return 'suspended'
+}
+
+interface RunLoopRoundArgs {
+  step: LoopStep
+  iteration: number
+  ctx: LoopRunContext
+  localProducerOf: Map<ArtifactName, StepId>
+  bodyOrderIndex: Map<StepId, number>
+  priorValues: Map<ArtifactName, unknown>
+  priorHashes: Map<ArtifactName, string>
+  thisValues: Map<ArtifactName, unknown>
+  thisHashes: Map<ArtifactName, string>
+  bodySessionIds: Map<StepId, string>
+}
+
+/** One round of the body. Eligibility is "every this-round producer has
+ * finished", and a this-round producer is one that sits earlier in the
+ * body — the same `producerPos < posIndex` test `runOneBodyStep` uses to
+ * decide whether an input is this round's value or the previous round's.
+ * Steps that don't wait on each other are queued together, bounded by
+ * `min(step.concurrency ?? 1, globalConcurrency)`.
+ *
+ * When that effective cap is 1, the scan stops at the first body step that
+ * is still waiting. A later sibling does not start while an earlier one
+ * has not finished, so the round matches the old sequential loop: `[a, b
+ * needs a, c]` runs a, then b, then c. The same holds when `concurrency`
+ * is above 1 but the global cap clips the round to 1.
+ *
+ * When the cap is greater than 1, a step may overtake an earlier sibling
+ * it does not depend on, while that sibling is still waiting. `[a, b needs
+ * a, c]` at cap 2 starts `c` alongside `a`; `b` still waits for `a`.
+ *
+ * The first failure stops further launches; work already inside the limit
+ * finishes, then the original error is rethrown into `runLoopBody`'s
+ * handler. */
+async function runLoopRound(args: RunLoopRoundArgs): Promise<void> {
+  const {
+    step,
+    iteration,
+    ctx,
+    localProducerOf,
+    bodyOrderIndex,
+    priorValues,
+    priorHashes,
+    thisValues,
+    thisHashes,
+    bodySessionIds,
+  } = args
+
+  const cap = Math.min(step.concurrency ?? 1, ctx.globalConcurrency)
+  const limit = pLimit(cap)
+  const remaining = new Set(step.body.map((bodyStep) => bodyStep.id))
+  const completed = new Set<StepId>()
+  const inFlight = new Map<StepId, Promise<'ok' | 'skipped' | 'error'>>()
+  let firstError: unknown
+
+  const thisRoundDeps = (bodyStep: Step, posIndex: number): StepId[] =>
+    earlierProducerIds(bodyStep, posIndex, localProducerOf, bodyOrderIndex)
+
+  const launchEligible = (): void => {
+    if (firstError !== undefined) return
+    for (const [posIndex, bodyStep] of step.body.entries()) {
+      if (!remaining.has(bodyStep.id) || inFlight.has(bodyStep.id)) continue
+      const ready = thisRoundDeps(bodyStep, posIndex).every((dep) => completed.has(dep))
+      if (!ready) {
+        // Cap 1 is the sequential body: do not look past a step that has
+        // not finished. Cap > 1 may start a later step that does not wait
+        // on this one.
+        if (cap === 1) break
+        continue
+      }
+      inFlight.set(
+        bodyStep.id,
+        limit(async () => {
+          // A slot freeing after a failure must not start the queued step.
+          if (firstError !== undefined) return 'skipped' as const
+          try {
+            await runOneBodyStep({
+              bodyStep,
+              posIndex,
+              iteration,
+              ctx,
+              localProducerOf,
+              bodyOrderIndex,
+              priorValues,
+              priorHashes,
+              thisValues,
+              thisHashes,
+              freshContext: step.freshContext ?? true,
+              bodySessionIds,
+            })
+            return 'ok' as const
+          } catch (err) {
+            if (firstError === undefined) firstError = err
+            return 'error' as const
+          }
+        }),
+      )
+    }
+  }
+
+  launchEligible()
+
+  while (inFlight.size > 0) {
+    const [doneId, status] = await Promise.race(
+      [...inFlight.entries()].map(async ([id, p]) => [id, await p] as const),
+    )
+    inFlight.delete(doneId)
+    remaining.delete(doneId)
+    if (status === 'ok') completed.add(doneId)
+    launchEligible()
+  }
+
+  if (firstError !== undefined) throw firstError
+
+  // This-round edges only point at earlier positions, so a round with no
+  // failure always drains. A leftover here is a scheduler bug.
+  assert.equal(
+    remaining.size,
+    0,
+    `loop "${step.id}" stalled: body step(s) [${[...remaining].join(', ')}] never became eligible`,
+  )
 }
 
 interface RunOneBodyStepArgs {

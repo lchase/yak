@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { AgentAdapter, AgentAdapterRequest, AgentAdapterResponse } from '../../src/adapters/types.js'
-import type { AgentStep, LoopStep } from '../../src/ir/types.js'
+import { readJournal } from '../../src/engine/journal.js'
+import type { AgentStep, JournalEnvelope, LoopStep } from '../../src/ir/types.js'
 import { runLoopStep, type LoopRunContext } from '../../src/steps/loop.js'
 
 function agent(overrides: Partial<AgentStep> & Pick<AgentStep, 'id' | 'prompt'>): AgentStep {
@@ -50,6 +51,7 @@ function baseCtx(adapter: AgentAdapter): LoopRunContext {
     cacheDir,
     semanticKey: 'sk',
     definitionKey: 'dk',
+    globalConcurrency: 4,
     outerArtifactHashes: new Map(),
     buildAdapter: () => adapter,
   }
@@ -121,5 +123,34 @@ describe('yak#35: loop `produces` on the onExhausted: "continue" path', () => {
     expect(JSON.parse(raw)).toEqual({ answer: 'ok' })
     // hash was seeded into the shared map for downstream cache keys
     expect(ctx.outerArtifactHashes.get('summary')).toBeTruthy()
+  })
+})
+
+describe('effective concurrency cap of 1', () => {
+  it('keeps [a, b needs a, c] in declared order when step.concurrency is higher', async () => {
+    const adapter = new QueueAdapter()
+    const step: LoopStep = {
+      id: 'revise',
+      kind: 'loop',
+      concurrency: 4,
+      until: 'true',
+      budget: { maxIterations: 1 },
+      body: [
+        { id: 'a', kind: 'command', run: 'echo a', produces: 'a' },
+        { id: 'b', kind: 'command', run: 'echo b', needs: ['a'], produces: 'b' },
+        { id: 'c', kind: 'command', run: 'echo c', produces: 'c' },
+      ],
+    }
+
+    const status = await runLoopStep(step, { ...baseCtx(adapter), globalConcurrency: 1 })
+    expect(status).toBe('ok')
+
+    const events = await readJournal(runDir)
+    const index = (t: JournalEnvelope['t'], stepId: string) =>
+      events.findIndex((event) => event.t === t && 'stepId' in event && event.stepId === stepId)
+    const order = ['a', 'b', 'c'].flatMap((id) => [index('step.started', id), index('step.completed', id)])
+    expect(order.every((n) => n >= 0)).toBe(true)
+    expect(order).toEqual([...order].sort((left, right) => left - right))
+    expect(new Set(order).size).toBe(order.length)
   })
 })

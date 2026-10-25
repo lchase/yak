@@ -59,6 +59,7 @@ interface RawStep {
   loop?: {
     until: Expr
     budget: Budget
+    concurrency?: number
     onExhausted?: 'suspend' | 'fail' | 'continue'
     freshContext?: boolean
     body: RawStep[]
@@ -90,6 +91,7 @@ const rawStepSchema: z.ZodType<RawStep> = z.lazy(() =>
       .object({
         until: rawExprSchema,
         budget: rawBudgetSchema,
+        concurrency: z.number().int().positive().optional(),
         onExhausted: z.enum(['suspend', 'fail', 'continue']).optional(),
         freshContext: z.boolean().optional(),
         body: z.array(rawStepSchema),
@@ -189,6 +191,7 @@ function normalizeStep(raw: RawStep): Step {
       body: raw.loop.body.map(normalizeStep),
       until: raw.loop.until,
       budget: raw.loop.budget,
+      concurrency: raw.loop.concurrency ?? 1,
       onExhausted: raw.loop.onExhausted ?? 'suspend',
       freshContext: raw.loop.freshContext ?? true,
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
