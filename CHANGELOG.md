@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/lchase/yak/compare/yak-v0.6.0...yak-v0.6.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* ignore null and undefined when collecting prompt roots ([#47](https://github.com/lchase/yak/issues/47)) ([73c1806](https://github.com/lchase/yak/commit/73c18063f9119d04daf3f3911e41be37dc5a844f))
+
 ## [0.6.0](https://github.com/lchase/yak/compare/yak-v0.5.0...yak-v0.6.0) (2026-10-25)
 
 
