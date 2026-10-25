@@ -41,6 +41,10 @@ program
   .option('--interactive', 'prompt inline for gate answers instead of exiting to resume later', false)
   .option('--isolation <mode>', 'run inside a fresh git worktree ("worktree") or the plain cwd ("none")', 'none')
   .option(
+    '--from <ref>',
+    'fork the isolation worktree from this ref instead of HEAD (requires --isolation worktree)',
+  )
+  .option(
     '--input <pair...>',
     'workflow input as key=value, repeatable — validated against the workflow inputSchema',
   )
@@ -52,6 +56,7 @@ program
         adapter: string
         interactive: boolean
         isolation: string
+        from?: string
         input?: string[]
         tag?: string
       },
@@ -60,6 +65,7 @@ program
         adapter: requireAdapterId(options.adapter),
         interactive: options.interactive,
         isolation: requireIsolation(options.isolation),
+        from: options.from,
         input: parseInputPairs(options.input),
         tag: options.tag,
       })

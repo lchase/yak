@@ -5,6 +5,13 @@ const execFileAsync = promisify(execFile)
 
 export class WorktreeCreationError extends Error {}
 
+/** `git rev-parse --verify <ref>^{commit}` failed: the ref is missing or
+ * does not peel to a commit. Callers must not create a worktree or start
+ * a run after this. */
+export class UnknownRefError extends Error {
+  override name = 'UnknownRefError'
+}
+
 /** Fixed engine identity for auto-commits — distinct from whatever the
  * repo's own `user.name`/`user.email` are configured to, per the post-M5
  * gaps map's worktree-auto-commit-strategy decision
@@ -59,5 +66,49 @@ export async function createWorktree(
         `failed to create worktree at "${worktreePath}" on branch "${branchName}" from "${baseRef}": ${message}`,
       )
     }
+  }
+}
+
+/** Resolves `ref` to one commit SHA. `^{commit}` peels tags and refuses
+ * anything that is not a commit. The SHA is what gets stored and later
+ * passed to `git worktree add` — callers must not keep the ref name and
+ * look it up again, because a branch or `origin/main` can move. */
+export async function resolveCommit(repoRoot: string, ref: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: repoRoot })
+    const sha = stdout.trim()
+    if (sha === '') throw new UnknownRefError(`unknown ref "${ref}"`)
+    return sha
+  } catch (err) {
+    if (err instanceof UnknownRefError) throw err
+    throw new UnknownRefError(`unknown ref "${ref}"`)
+  }
+}
+
+/** True when `refs/heads/<branchName>` already exists. A missing ref is
+ * false, not an error — resume uses that to decide whether to reattach
+ * the run branch or create it from the recorded commit. */
+export async function localBranchExists(repoRoot: string, branchName: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branchName}`], {
+      cwd: repoRoot,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Checks out an existing local branch into a new worktree. Unlike
+ * `createWorktree`, this does not move the branch: resume reattaches
+ * `yak/<run-id>` so commits the run already made stay put. */
+export async function attachWorktree(repoRoot: string, branchName: string, worktreePath: string): Promise<void> {
+  try {
+    await execFileAsync('git', ['worktree', 'add', worktreePath, branchName], { cwd: repoRoot })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new WorktreeCreationError(
+      `failed to attach worktree at "${worktreePath}" on existing branch "${branchName}": ${message}`,
+    )
   }
 }

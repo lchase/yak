@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import { flattenSteps } from '../ir/graph.js'
@@ -10,7 +10,7 @@ import type { AdapterId, ArtifactName, RunIsolation, StepId, Workflow } from '..
 import { validateWorkflow } from '../ir/validate.js'
 import { completeGate } from '../steps/gate.js'
 import { resolveSchemaSpec } from '../ir/schema-resolve.js'
-import { createWorktree } from '../util/git.js'
+import { attachWorktree, createWorktree, localBranchExists, resolveCommit } from '../util/git.js'
 import { sha256 } from '../util/hash.js'
 import { readArtifactRawOrUndefined, writeArtifact } from './artifacts.js'
 import { appendJournalEvent, completedStepsFromJournal, readJournal } from './journal.js'
@@ -39,6 +39,12 @@ export interface ExecuteOptions {
    * correlation tag, stored verbatim on `run.started` and echoed by `yak
    * pending`/`yak status`. No engine semantics attached. */
   tag?: string
+  /** `yak run --isolation worktree --from <ref>`: revision to fork the
+   * run worktree from. Resolved with `git rev-parse --verify <ref>^{commit}`
+   * before the run starts; the commit SHA is stored on `run.started` as
+   * `worktreeBase`. Requires `isolation: 'worktree'`. Omit to fork from
+   * HEAD. Resume ignores this field and uses the journaled commit. */
+  from?: string
   /** yak#23: invoked once, immediately after `run.started` is journalled
    * and before any step executes, so an out-of-process launcher can
    * capture the run id without waiting for a terminal state or diffing
@@ -126,6 +132,38 @@ function worktreeBranchFor(runId: string): string {
   return `yak/${runId}`
 }
 
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Recreates a missing run worktree from the commit recorded at start.
+ * An existing worktree is left alone — resume never resets it. An existing
+ * `yak/<run-id>` branch is reattached, so commits the run already made stay
+ * on that branch. Only when the branch is gone do we fork again, and then
+ * from `worktreeBase` (a SHA), never from the caller's original ref. */
+async function materializeRunWorktree(
+  repoRoot: string,
+  runsDir: string,
+  runId: string,
+  worktreeBase: string | undefined,
+): Promise<void> {
+  const worktreePath = worktreePathFor(runsDir, runId)
+  if (await pathExists(worktreePath)) return
+  if (worktreeBase === undefined) return
+
+  const branchName = worktreeBranchFor(runId)
+  if (await localBranchExists(repoRoot, branchName)) {
+    await attachWorktree(repoRoot, branchName, worktreePath)
+    return
+  }
+  await createWorktree(repoRoot, branchName, worktreeBase, worktreePath)
+}
+
 function generateRunId(): string {
   const iso = new Date().toISOString() // e.g. 2026-08-08T14:03:11.123Z
   const [datePart, timePart] = iso.split('T')
@@ -142,12 +180,24 @@ export async function executeWorkflowFile(
   const adapter = opts.adapter ?? DEFAULT_ADAPTER
   const isolation = opts.isolation ?? 'none'
 
+  // `--from` only applies to the run worktree. Item worktrees fork from
+  // that worktree's HEAD later; they never see this ref.
+  if (opts.from !== undefined && isolation !== 'worktree') {
+    throw new Error('--from requires --isolation worktree')
+  }
+
   const raw = await loadWorkflowYaml(workflowPath)
   const workflow = normalizeWorkflow(raw)
   await validateWorkflow(workflow, cwd, isolation)
 
   // yak#27: resolve + validate `--input` before any run state exists.
   const inputValue = await resolveRunInput(workflow, opts.input, cwd)
+
+  // Pin `--from` before any run state exists. An unknown ref throws here:
+  // no worktree, no run directory, no `run.started`. The stored value is
+  // the commit SHA, not the ref name, so a later move of the ref cannot
+  // change where this run started.
+  const worktreeBase = opts.from !== undefined ? await resolveCommit(cwd, opts.from) : undefined
 
   const runId = generateRunId()
   const runDir = path.join(runsDir, runId)
@@ -172,6 +222,7 @@ export async function executeWorkflowFile(
     isolation,
     pid: process.pid,
     ...(opts.tag !== undefined ? { tag: opts.tag } : {}),
+    ...(worktreeBase !== undefined ? { worktreeBase } : {}),
   })
 
   if (inputWritten) {
@@ -195,7 +246,7 @@ export async function executeWorkflowFile(
   if (isolation === 'worktree') {
     const worktreePath = worktreePathFor(runsDir, runId)
     try {
-      await createWorktree(cwd, worktreeBranchFor(runId), 'HEAD', worktreePath)
+      await createWorktree(cwd, worktreeBranchFor(runId), worktreeBase ?? 'HEAD', worktreePath)
     } catch {
       // A worktree-add failure (e.g. a race against another concurrent run)
       // is an ordinary run failure, not an uncaught exception — it goes
@@ -331,16 +382,19 @@ export async function resumeRun(runId: string, opts: ExecuteOptions = {}): Promi
     )
   }
 
-  // Same reasoning as the adapter check above: isolation is a per-run
-  // constant persisted on `run.started`, so a conflicting override is
-  // rejected rather than silently honored. A worktree-isolated run's
-  // worktree already exists from its first execution — resume just points
-  // steps back at it, never recreates it.
+  // Isolation is a per-run constant persisted on `run.started`, so a
+  // conflicting override is rejected rather than silently honored.
+  // `opts.from` is ignored: resume must not re-resolve a ref that may
+  // have moved. It reuses the worktree, or recreates it from the
+  // journaled `worktreeBase` commit when that worktree is gone.
   const persistedIsolation = startedEvent?.isolation ?? 'none'
   if (opts.isolation !== undefined && opts.isolation !== persistedIsolation) {
     throw new Error(
       `run ${runId} started with isolation "${persistedIsolation}" — cannot resume with isolation "${opts.isolation}"`,
     )
+  }
+  if (persistedIsolation === 'worktree') {
+    await materializeRunWorktree(cwd, runsDir, runId, startedEvent?.worktreeBase)
   }
   const stepCwd = persistedIsolation === 'worktree' ? worktreePathFor(runsDir, runId) : cwd
 

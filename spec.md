@@ -431,7 +431,7 @@ The agent produces a patch; the engine pushes it. This keeps "the agent has full
 ## 6. CLI surface (MVP)
 
 ```
-yak run <workflow> [--input k=v] [--interactive] [--isolation worktree] [--tag <string>]
+yak run <workflow> [--input k=v] [--interactive] [--isolation worktree] [--from <ref>] [--tag <string>]
 yak resume <run-id>
 yak status [<run-id>]          # what's running, what's pending a human
 yak pending                    # every run across the repo awaiting input
@@ -443,6 +443,8 @@ yak replay <run-id> --from <step-id>
 `yak pending` is the daily-driver command: one place that answers "what is waiting on me?"
 
 `yak run` prints `run <run-id> started` (and, under `--isolation worktree`, the branch `yak/<run-id>`) to **stderr** the moment `run.started` is journalled, before any step runs — so an out-of-process launcher can capture the id without waiting for a terminal state. stdout carries only the terminal-state line.
+
+`--from <ref>` is valid only with `--isolation worktree`. The ref is resolved with `git rev-parse --verify <ref>^{commit}` before the run starts; an unknown ref errors and creates no worktree and no run. The resolved commit is stored on `run.started` as `worktreeBase`, and resume reuses that commit without resolving the ref again. Omit `--from` to fork from `HEAD`. Map item worktrees are unchanged: they still fork from the run worktree.
 
 ---
 

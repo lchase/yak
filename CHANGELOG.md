@@ -18,6 +18,7 @@
 
 ### Features
 
+* `yak run --isolation worktree --from <ref>` forks the run worktree from a resolved commit (`ExecuteOptions.from`). The commit is stored on `run.started` as `worktreeBase`; resume reuses it and does not re-resolve the ref. Omitting `--from` still forks from `HEAD`
 * a loop body can run independent steps in parallel via optional `concurrency` (effective cap 1 keeps declared order)
 
 ### Bug Fixes
