@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/lchase/yak/compare/yak-v0.7.0...yak-v0.7.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **deps:** clear npm audit via vitest 5 and zod 4 ([#51](https://github.com/lchase/yak/issues/51)) ([decc40c](https://github.com/lchase/yak/commit/decc40c5123ff6e912986f2f3080cc963198a25a))
+
 ## [0.7.0](https://github.com/lchase/yak/compare/yak-v0.6.1...yak-v0.7.0) (2026-10-25)
 
 
