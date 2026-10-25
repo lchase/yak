@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/lchase/yak/compare/yak-v0.6.1...yak-v0.7.0) (2026-10-25)
+
+
+### Features
+
+* fork worktree isolation from a given commit with --from ([#49](https://github.com/lchase/yak/issues/49)) ([5e74b4b](https://github.com/lchase/yak/commit/5e74b4b1039e1d1c4fd33acd710873019651ed73))
+
 ## [0.6.1](https://github.com/lchase/yak/compare/yak-v0.6.0...yak-v0.6.1) (2026-10-25)
 
 
