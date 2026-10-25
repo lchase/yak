@@ -3,8 +3,11 @@ import jexl from 'jexl'
 const PLACEHOLDER_RE = /\{\{\s*([^}]+?)\s*\}\}/g
 const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/y
 
-/** Jexl treats these as literals or word-operators, not context lookups. */
-const NOT_A_ROOT = new Set(['true', 'false', 'in'])
+/** Not artifact roots. `true`/`false` are jexl literals and `in` is a
+ * word-operator. jexl 2.3.0 lexes `null` and `undefined` as identifiers that
+ * resolve to `undefined`, so `x == null` works at runtime via loose `==`;
+ * validation must not require an artifact with either name. */
+const NOT_A_ROOT = new Set(['true', 'false', 'in', 'null', 'undefined'])
 
 /** Every context identifier a `{{...}}` placeholder reads — used by
  * validate.ts's load-time check that each one is in `needs ∪ context.inherit`.
