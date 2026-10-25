@@ -20,7 +20,7 @@ const rawAgentContextSchema = z.union([
 
 // AgentStep/GateStep.schema: a key in .yak/schemas.ts, or an inline JSON
 // Schema (roadmap map ticket 09 / M1 ticket 08).
-const rawSchemaSpecSchema = z.union([z.string(), z.object({ inline: z.record(z.unknown()) })])
+const rawSchemaSpecSchema = z.union([z.string(), z.object({ inline: z.record(z.string(), z.unknown()) })])
 
 const rawAgentSchema = z.object({
   prompt: z.union([z.object({ file: z.string() }), z.object({ inline: z.string() })]),
