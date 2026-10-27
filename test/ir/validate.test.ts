@@ -538,5 +538,48 @@ describe('validateWorkflow', () => {
         process.env.PATH = originalPath
       }
     })
+
+    it('accepts a hostname allowlist without requiring docker when the step is not sandboxed', async () => {
+      const wf = workflow([
+        agent({
+          id: 'a',
+          allowedDomains: ['api.anthropic.com', 'registry.npmjs.org', 'objects.githubusercontent.com'],
+        }),
+      ])
+      await expect(validateWorkflow(wf)).resolves.toBeUndefined()
+    })
+
+    it('rejects a non-hostname allowlist entry before the docker check', async () => {
+      const originalPath = process.env.PATH
+      process.env.PATH = ''
+      try {
+        const wf = workflow([
+          agent({ id: 'a', sandbox: 'docker', allowedDomains: ['https://api.anthropic.com', 'github.com'] }),
+        ])
+        await expect(validateWorkflow(wf)).rejects.toThrow(
+          /allowedDomains entry "https:\/\/api\.anthropic\.com" is not a hostname/,
+        )
+      } finally {
+        process.env.PATH = originalPath
+      }
+    })
+
+    it.each([
+      'api.anthropic.com/v1',
+      'api.anthropic.com:443',
+      '*.anthropic.com',
+      '.anthropic.com',
+      'localhost',
+      'not a host',
+      '',
+    ])('rejects allowlist entry %j', async (domain) => {
+      const wf = workflow([agent({ id: 'a', allowedDomains: [domain] })])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/is not a hostname/)
+    })
+
+    it('rejects an empty allowlist', async () => {
+      const wf = workflow([agent({ id: 'a', allowedDomains: [] })])
+      await expect(validateWorkflow(wf)).rejects.toThrow(/allowedDomains must list at least one hostname/)
+    })
   })
 })

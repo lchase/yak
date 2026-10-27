@@ -39,6 +39,7 @@ export interface AgentStep extends BaseStep {
   repairAttempts?: number              // default 2
   sandbox?: 'docker' | 'none'          // default 'none' — see ticket 07/08, roadmap map
   image?: string                       // overrides the yak-shipped default agent-sandbox image
+  allowedDomains?: string[]            // proxy allowlist (hostnames). Omitted → api.anthropic.com only.
 }
 
 export interface CommandStep extends BaseStep {

@@ -127,8 +127,9 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     private readonly runDir: string,
     private readonly stepId: string,
     /** Set (non-`undefined`) when `AgentStep.sandbox === 'docker'`; `image`
-     * is `undefined` for the yak-shipped default. See ticket 07/08. */
-    private readonly sandbox?: { image?: string },
+     * is `undefined` for the yak-shipped default. `allowedDomains`, when
+     * set, replaces `DEFAULT_ALLOWED_DOMAINS`. See ticket 07/08. */
+    private readonly sandbox?: { image?: string; allowedDomains?: string[] },
   ) {}
 
   async run(req: AgentAdapterRequest): Promise<AgentAdapterResponse> {
@@ -138,7 +139,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
     let network: AgentSandboxNetwork | undefined
     if (this.sandbox) {
-      network = await createAgentSandboxNetwork(this.stepId)
+      network =
+        this.sandbox.allowedDomains !== undefined
+          ? await createAgentSandboxNetwork(this.stepId, this.sandbox.allowedDomains)
+          : await createAgentSandboxNetwork(this.stepId)
     }
 
     const options: Options = {

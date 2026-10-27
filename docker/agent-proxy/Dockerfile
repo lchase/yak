@@ -3,9 +3,10 @@
 #   docker build -t yak-agent-sandbox-proxy:latest docker/agent-proxy
 #
 # One instance per sandboxed agent-step invocation (src/adapters/
-# sandbox-network.ts), attached to that step's `--internal` docker network
-# plus `bridge` for its own route out. ALLOWED_DOMAINS (comma-separated) is
-# rendered into squid.conf at container start by entrypoint.sh.
+# sandbox-network.ts). It is started on the egress network (`bridge`, or
+# `podman` when that network is absent) and then attached to the step's
+# `--internal` network. ALLOWED_DOMAINS (comma-separated) is rendered into
+# squid.conf at container start by entrypoint.sh.
 FROM ubuntu:24.04
 
 RUN apt-get update \

@@ -67,7 +67,12 @@ function buildAdapter(
   return new ClaudeCodeAdapter(
     ctx.runDir,
     step.id,
-    step.sandbox === 'docker' ? { image: step.image } : undefined,
+    step.sandbox === 'docker'
+      ? {
+          image: step.image,
+          ...(step.allowedDomains !== undefined ? { allowedDomains: step.allowedDomains } : {}),
+        }
+      : undefined,
   )
 }
 
