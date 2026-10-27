@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/lchase/yak/compare/yak-v0.7.1...yak-v0.8.0) (2026-10-27)
+
+
+### Features
+
+* pass agent allowedDomains into the sandbox proxy ([#53](https://github.com/lchase/yak/issues/53)) ([5fe2c6a](https://github.com/lchase/yak/commit/5fe2c6a9b60ad26ffc396b19a65199f7939a6fb9))
+
 ## [0.7.1](https://github.com/lchase/yak/compare/yak-v0.7.0...yak-v0.7.1) (2026-10-25)
 
 
