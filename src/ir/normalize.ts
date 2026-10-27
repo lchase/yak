@@ -1,11 +1,15 @@
 import { z } from 'zod'
 import type { AgentStep, Budget, CommandStep, Expr, GateStep, LoopStep, MapStep, Step, TransformStep, Workflow } from './types.js'
 
+const rawSandboxSchema = z.enum(['docker', 'none'])
+
 const rawCommandSchema = z.object({
   run: z.string(),
   cwd: z.string().optional(),
   failOn: z.enum(['exitCode', 'never']).optional(),
   capture: z.array(z.enum(['stdout', 'stderr', 'exitCode'])).optional(),
+  sandbox: rawSandboxSchema.optional(),
+  image: z.string().min(1).optional(),
 })
 
 const rawTransformSchema = z.object({
@@ -29,6 +33,9 @@ const rawAgentSchema = z.object({
   tools: z.array(z.string()).optional(),
   model: z.string().optional(),
   repairAttempts: z.number().optional(),
+  sandbox: rawSandboxSchema.optional(),
+  image: z.string().min(1).optional(),
+  allowedDomains: z.array(z.string()).optional(),
 })
 
 const rawExprSchema: z.ZodType<Expr> = z.union([z.string(), z.object({ fn: z.string() })])
@@ -128,6 +135,8 @@ function normalizeStep(raw: RawStep): Step {
       capture: raw.command.capture ?? ['stdout', 'stderr', 'exitCode'],
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
       ...(raw.command.cwd !== undefined ? { cwd: raw.command.cwd } : {}),
+      ...(raw.command.sandbox !== undefined ? { sandbox: raw.command.sandbox } : {}),
+      ...(raw.command.image !== undefined ? { image: raw.command.image } : {}),
       ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
       ...(raw.finally !== undefined ? { finally: raw.finally } : {}),
     }
@@ -160,6 +169,11 @@ function normalizeStep(raw: RawStep): Step {
       ...(raw.agent.tools !== undefined ? { tools: raw.agent.tools } : {}),
       ...(raw.agent.model !== undefined ? { model: raw.agent.model } : {}),
       ...(raw.agent.repairAttempts !== undefined ? { repairAttempts: raw.agent.repairAttempts } : {}),
+      ...(raw.agent.sandbox !== undefined ? { sandbox: raw.agent.sandbox } : {}),
+      ...(raw.agent.image !== undefined ? { image: raw.agent.image } : {}),
+      // Kiln searches the installed bundle for the text `raw.agent.allowedDomains`
+      // (`YAK_ALLOWLIST_MARKER`). Keep this property access intact.
+      ...(raw.agent.allowedDomains !== undefined ? { allowedDomains: raw.agent.allowedDomains } : {}),
       ...(raw.produces !== undefined ? { produces: raw.produces } : {}),
       ...(raw.skipIf !== undefined ? { skipIf: raw.skipIf } : {}),
       ...(raw.finally !== undefined ? { finally: raw.finally } : {}),

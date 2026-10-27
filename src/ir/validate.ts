@@ -66,6 +66,7 @@ export async function validateWorkflow(
   await checkGateSchemaKeys(flatSteps, cwd)
   await checkGateRenderPlaceholders(flatSteps, cwd)
   checkSandboxImage(flatSteps)
+  checkAllowedDomains(flatSteps)
   await checkDockerAvailable(flatSteps)
 }
 
@@ -79,6 +80,26 @@ function checkSandboxImage(steps: Step[]): void {
       throw new WorkflowValidationError(
         `step "${step.id}": sandbox: 'docker' requires an "image" field — yak has no default image`,
       )
+    }
+  }
+}
+
+/** Hostnames only — same shape Kiln emits. A leading dot, scheme, port,
+ * path, or wildcard would widen squid's `dstdomain` match or break the
+ * generated ACL. Single-label names (`localhost`) are rejected: the proxy
+ * allowlist is for external hosts. */
+const ALLOWLIST_HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i
+
+function checkAllowedDomains(steps: Step[]): void {
+  for (const step of steps) {
+    if (step.kind !== 'agent' || step.allowedDomains === undefined) continue
+    if (step.allowedDomains.length === 0) {
+      throw new WorkflowValidationError(`step "${step.id}": allowedDomains must list at least one hostname`)
+    }
+    for (const domain of step.allowedDomains) {
+      if (!ALLOWLIST_HOSTNAME.test(domain)) {
+        throw new WorkflowValidationError(`step "${step.id}": allowedDomains entry "${domain}" is not a hostname`)
+      }
     }
   }
 }

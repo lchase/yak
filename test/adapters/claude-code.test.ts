@@ -14,14 +14,14 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }))
 
 const teardownMock = vi.fn(async () => {})
-const createAgentSandboxNetworkMock = vi.fn(async (stepId: string) => ({
+const createAgentSandboxNetworkMock = vi.fn(async (stepId: string, _allowedDomains?: string[]) => ({
   networkName: `net-${stepId}`,
   proxyUrl: 'http://net-proxy:3128',
   teardown: teardownMock,
 }))
 
 vi.mock('../../src/adapters/sandbox-network.js', () => ({
-  createAgentSandboxNetwork: (stepId: string) => createAgentSandboxNetworkMock(stepId),
+  createAgentSandboxNetwork: (...args: [string, string[]?]) => createAgentSandboxNetworkMock(...args),
 }))
 
 /** Minimal `Query`: an async generator over the given messages, plus the
@@ -300,6 +300,17 @@ describe('ClaudeCodeAdapter', () => {
       expect(createAgentSandboxNetworkMock).toHaveBeenCalledWith('code')
       const call = queryMock.mock.calls[0]![0]
       expect(call.options?.spawnClaudeCodeProcess).toBeTypeOf('function')
+    })
+
+    it('passes the step allowlist into the sandbox network when it is set', async () => {
+      const { ClaudeCodeAdapter } = await import('../../src/adapters/claude-code.js')
+      queryMock.mockReturnValue(fakeQuery([resultSuccess()]))
+
+      const domains = ['api.anthropic.com', 'registry.npmjs.org', 'github.com']
+      const adapter = new ClaudeCodeAdapter(runDir, 'code', { allowedDomains: domains })
+      await adapter.run(baseReq)
+
+      expect(createAgentSandboxNetworkMock).toHaveBeenCalledWith('code', domains)
     })
 
     it('does not set up a sandbox network when sandbox is omitted', async () => {
