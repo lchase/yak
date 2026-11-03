@@ -1,3 +1,5 @@
+> **This repository has moved** to [lchase/kiln](https://github.com/lchase/kiln) under [`packages/yak`](https://github.com/lchase/kiln/tree/main/packages/yak). The npm package `@lchase/yak` is unchanged and still maintained. Issues and pull requests should go to [lchase/kiln](https://github.com/lchase/kiln).
+
 <p align="center">
   <img src="docs-site/static/img/yak-mascot.png" alt="yak mascot" width="320" />
 </p>
